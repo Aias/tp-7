@@ -1,0 +1,23 @@
+diff --git a/src/device.rs b/src/device.rs
+index 3c19e2a..8e34728 100644
+--- a/src/device.rs
++++ b/src/device.rs
+@@ -5,6 +5,7 @@ use crate::output::AppError;
+ 
+ pub const TP7_VENDOR_ID: u16 = 0x2367;
+ pub const TP7_PRODUCT_ID: u16 = 0x0019;
++pub const TP7_AUDIO_PRODUCT_ID: u16 = 0x8019;
+ 
+ #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+ #[serde(rename_all = "kebab-case")]
+@@ -72,7 +73,9 @@ pub fn list_tp7_devices() -> Result<Vec<Tp7Device>, AppError> {
+ 
+     Ok(devices
+         .filter(|device| {
+-            device.vendor_id() == TP7_VENDOR_ID && device.product_id() == TP7_PRODUCT_ID
++            device.vendor_id() == TP7_VENDOR_ID
++                && (device.product_id() == TP7_PRODUCT_ID
++                    || device.product_id() == TP7_AUDIO_PRODUCT_ID)
+         })
+         .map(Tp7Device::from)
+         .collect())
