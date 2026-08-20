@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 
 @MainActor
@@ -9,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var ingesting = false
 	private var identity: DeviceInfo?
 	private var lastGesture: String?
+	private let inserter = TextInserter()
+	private var dictation: DictationSession?
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		statusItem = StatusItemController(
@@ -19,6 +22,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 		self.midi = midi
 		midi.start()
+		if !TextInserter.accessibilityGranted {
+			TextInserter.requestAccessibility()
+		}
+		Task {
+			let granted = await AVCaptureDevice.requestAccess(for: .audio)
+			Log.d("mic permission granted: \(granted)")
+			do {
+				try await DictationSession.prepareModel()
+			} catch {
+				Log.d("model preparation failed: \(error)")
+			}
+		}
 	}
 
 	private func handle(_ event: MIDIEvent) {
@@ -43,8 +58,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		case .gesture(let gesture):
 			gesturesSeen = true
 			lastGesture = describe(gesture)
+			if case .button(.memo, let pressed) = gesture {
+				if pressed {
+					startDictation()
+				} else {
+					stopDictation()
+				}
+			}
 		}
 		render()
+	}
+
+	private func startDictation() {
+		guard dictation == nil, !ingesting else { return }
+		let session = DictationSession(inserter: inserter)
+		dictation = session
+		Task {
+			do {
+				try await session.start()
+			} catch {
+				dictation = nil
+				Notifier.post(
+					title: "Dictation failed",
+					message: "Could not capture from the TP-7: \(error)")
+				render()
+			}
+		}
+		render()
+	}
+
+	private func stopDictation() {
+		guard let session = dictation else { return }
+		dictation = nil
+		render()
+		Task {
+			_ = await session.finish()
+		}
 	}
 
 	private func ingestNow() {
@@ -106,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	private var state: DeviceState {
+		if dictation != nil { return .dictating }
 		if ingesting { return .ingesting }
 		if !devicePresent { return .absent }
 		return gesturesSeen ? .control : .recorder

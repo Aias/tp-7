@@ -7,6 +7,7 @@ enum DeviceState {
 	/// Device present and gesture events are flowing (MIDI=ctrl).
 	case control
 	case ingesting
+	case dictating
 
 	var symbolName: String {
 		switch self {
@@ -14,6 +15,7 @@ enum DeviceState {
 		case .recorder: "circle"
 		case .control: "record.circle"
 		case .ingesting: "arrow.down.circle"
+		case .dictating: "waveform.circle"
 		}
 	}
 
@@ -23,6 +25,7 @@ enum DeviceState {
 		case .recorder: "recorder mode"
 		case .control: "control mode"
 		case .ingesting: "ingesting…"
+		case .dictating: "dictating…"
 		}
 	}
 }
