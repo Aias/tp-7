@@ -48,7 +48,9 @@ The unifying principle: for anything with a digital source of truth, the voice n
 ## 8. Modal dictation — gestures select the transform
 
 One button, several grammars, distinguished by gesture (all measurable from press/release timing): plain hold = verbatim prose; double-tap-then-hold = "instruction mode" where an LLM reformats the utterance (bullet list, email reply, commit message, ticket description); a side-button chord = code dictation. Dictation stops being one feature and becomes a family of voice→text transforms selected by thumb.
-*Cheapest probe: two gesture patterns routed to two prompts.*
+
+The first transform worth building is **cleanup**: the live stream types fillers and stutters verbatim ("um", restarts), while the batch pipeline's clean-verbatim editing never touches inserted text. A post-dictation cleanup pass — on release, replace the typed utterance with a cleaned version (the deferred-rewrite machinery in the inserter already applies exactly this kind of one-shot correction) — closes that gap, and its gesture selection (clean by default vs verbatim on a modifier, or vice versa) is the natural seed of the whole modal system.
+*Cheapest probe: two gesture patterns routed to two prompts; for cleanup, one LLM pass over the finished utterance re-applied via the inserter.*
 
 ## 9. Work-context correlation — "what was I doing when I said this"
 
