@@ -1,0 +1,247 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { z } from 'zod';
+import { createOutputFolder, type SpeakerHint } from './utils.js';
+import { convertToFlac } from './audio.js';
+import { transcribe, type TranscriptionResult } from './transcription.js';
+import { summarize } from './summarization.js';
+import { cleanTranscript, renderTranscript } from './cleaning.js';
+import { renameOutputFolder, getOutputFilenames } from './naming.js';
+import { refineSpeakerIdentification, logSpeakerIdentification } from './speaker-identification.js';
+import { getKnownSpeakers } from './transcription.config.loader.js';
+
+export interface TranscriptionOptions {
+	inputPath: string;
+	speakers?: SpeakerHint;
+	outputDir?: string;
+}
+
+export interface CleaningOptions {
+	transcriptPath: string;
+	outputPath?: string;
+	transcriptData?: TranscriptionResult;
+}
+
+export interface SummarizationOptions {
+	transcriptPath: string;
+	outputDir?: string;
+	renameFolder?: boolean;
+	originalFilename?: string;
+}
+
+/**
+ * Run only the transcription step
+ */
+export async function runTranscriptionOnly(options: TranscriptionOptions): Promise<{
+	outputDir: string;
+	transcriptionOutput: TranscriptionResult;
+	transcriptPath: string;
+}> {
+	const { inputPath, speakers } = options;
+
+	// Create output folder if not provided
+	const outputDir = options.outputDir || createOutputFolder(inputPath);
+	console.log(`📁 Output folder: ${outputDir}`);
+
+	const audioPath = await convertToFlac(inputPath, outputDir);
+
+	// Transcribe and get sentences/paragraphs
+	const result = await transcribe(audioPath, speakers);
+
+	// Save the complete output to JSON
+	const jsonPath = path.join(outputDir, 'transcript-raw.json');
+	fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2));
+	console.log(`✅ Raw transcript saved → ${jsonPath}`);
+
+	return { outputDir, transcriptionOutput: result, transcriptPath: jsonPath };
+}
+
+// Schema for the complete transcription output
+const TranscriptionResultSchema = z.object({
+	transcript: z.any(),
+	sentences: z.any(),
+	paragraphs: z.any(),
+});
+
+/**
+ * Run only the cleaning step on an existing transcript
+ */
+export async function runCleaningOnly(options: CleaningOptions): Promise<{
+	cleanedPath: string;
+	cleanedText: string;
+}> {
+	const { transcriptPath } = options;
+	let transcriptionOutput: TranscriptionResult;
+
+	// Check if we have transcript data provided or need to load it
+	if (options.transcriptData) {
+		transcriptionOutput = options.transcriptData;
+	} else {
+		// Load transcript from JSON file
+		console.log(`📖 Reading transcript JSON from ${transcriptPath}...`);
+		const jsonContent = fs.readFileSync(transcriptPath, 'utf-8');
+
+		try {
+			const parsed = JSON.parse(jsonContent) as unknown;
+			// Validate the parsed JSON has the required structure
+			const validated = TranscriptionResultSchema.parse(parsed);
+			transcriptionOutput = validated as TranscriptionResult; // We're trusting our own output schema here.
+		} catch (error) {
+			if (error instanceof z.ZodError) {
+				console.error('❌ Invalid transcript JSON structure:', error.message);
+				throw new Error(`Invalid transcript file: ${transcriptPath}`, { cause: error });
+			}
+			throw error;
+		}
+	}
+
+	// Resolving speaker names and editing the passages are independent — names are
+	// applied when the transcript is rendered — so both run at once.
+	const [speakerMap, groups] = await Promise.all([
+		getKnownSpeakers().then((knownSpeakers) =>
+			refineSpeakerIdentification(transcriptionOutput.transcript, knownSpeakers),
+		),
+		cleanTranscript(transcriptionOutput),
+	]);
+	logSpeakerIdentification(speakerMap);
+
+	const cleanedText = renderTranscript(groups, speakerMap);
+
+	// Determine output path
+	const outputPath = options.outputPath || transcriptPath.replace(/\.json$/, '-cleaned.md');
+
+	console.log('💾 Saving cleaned transcript...');
+	fs.writeFileSync(outputPath, `## Transcript\n\n${cleanedText}\n`);
+	console.log(`✅ Cleaned transcript saved → ${outputPath}`);
+
+	return { cleanedPath: outputPath, cleanedText };
+}
+
+/**
+ * Run only the summarization step on an existing transcript
+ */
+export async function runSummarizationOnly(options: SummarizationOptions): Promise<{
+	summaryPath: string;
+	summary: string;
+	outputDir: string;
+}> {
+	const { transcriptPath } = options;
+
+	// Read transcript
+	console.log(`📖 Reading transcript from ${transcriptPath}...`);
+	const content = fs.readFileSync(transcriptPath, 'utf-8');
+
+	// Extract just the transcript part
+	const transcriptMatch = content.match(/## Transcript\n\n([\s\S]+?)(?:\n\n---|\n\n##|$)/);
+	const transcriptText = transcriptMatch?.[1] ?? content;
+
+	// Get or create output directory
+	let outputDir = options.outputDir || path.dirname(transcriptPath);
+
+	const summary = await summarize(transcriptText);
+
+	// Write summary
+	const summaryPath = path.join(outputDir, 'summary.md');
+	console.log('💾 Writing summary...');
+	fs.writeFileSync(
+		summaryPath,
+		`## Summary\n\n${summary}\n\n---\n\n## Transcript\n\n${transcriptText}\n`,
+	);
+
+	// Optionally rename folder based on summary
+	if (options.renameFolder && options.originalFilename) {
+		outputDir = await renameOutputFolder(outputDir, summary, options.originalFilename);
+
+		// Update paths after rename
+		const folderName = path.basename(outputDir);
+		const filenames = getOutputFilenames(folderName);
+		const newSummaryPath = path.join(outputDir, filenames.final);
+
+		// Rename the summary file
+		const currentSummaryPath = path.join(outputDir, path.basename(summaryPath));
+		fs.renameSync(currentSummaryPath, newSummaryPath);
+
+		console.log(`✅ Summary saved → ${newSummaryPath}`);
+		return { summaryPath: newSummaryPath, summary, outputDir };
+	}
+
+	console.log(`✅ Summary saved → ${summaryPath}`);
+	return { summaryPath, summary, outputDir };
+}
+
+/**
+ * Run the full pipeline (backward compatibility)
+ */
+export async function runFullPipeline(options: TranscriptionOptions): Promise<void> {
+	const { inputPath, speakers } = options;
+
+	// Step 1: Transcribe
+	const { outputDir, transcriptionOutput, transcriptPath } = await runTranscriptionOnly({
+		inputPath,
+		speakers,
+	});
+
+	// Step 2: Resolve speaker names and clean
+	const { cleanedPath, cleanedText } = await runCleaningOnly({
+		transcriptPath,
+		transcriptData: transcriptionOutput,
+	});
+
+	// Step 3: Summarize with folder renaming
+	try {
+		const { summaryPath, summary } = await runSummarizationOnly({
+			transcriptPath: cleanedPath,
+			outputDir,
+			renameFolder: true,
+			originalFilename: inputPath,
+		});
+
+		// Rename transcript files to match folder name
+		const folderName = path.basename(path.dirname(summaryPath));
+		const filenames = getOutputFilenames(folderName);
+
+		// Update file paths after folder rename
+		const finalOutputDir = path.dirname(summaryPath);
+		const currentRawPath = path.join(finalOutputDir, path.basename(transcriptPath));
+		const currentCleanedPath = path.join(finalOutputDir, path.basename(cleanedPath));
+
+		const newRawPath = path.join(finalOutputDir, filenames.raw);
+		const newCleanedPath = path.join(finalOutputDir, filenames.cleaned);
+
+		if (fs.existsSync(currentRawPath)) {
+			fs.renameSync(currentRawPath, newRawPath);
+		}
+		if (fs.existsSync(currentCleanedPath)) {
+			fs.renameSync(currentCleanedPath, newCleanedPath);
+		}
+
+		// Print results
+		console.log(`\n📄 Raw transcript saved → ${newRawPath}`);
+		console.log(`🧹 Cleaned transcript saved → ${newCleanedPath}`);
+		console.log('\n---\n');
+		console.log('## Summary\n\n' + summary + '\n');
+		console.log('---\n');
+		console.log(cleanedText);
+	} catch (error) {
+		console.error(
+			'\n⚠️  Summarization failed:',
+			error instanceof Error ? error.message : String(error),
+		);
+
+		// Still rename folder with basic naming if summary failed
+		const { extractDateTimeFromFilename, getCurrentDate } = await import('./naming.js');
+		const dateTime = extractDateTimeFromFilename(inputPath) ?? getCurrentDate();
+		const newFolderName = `${dateTime}-untitled`;
+		const newPath = path.join(path.dirname(outputDir), newFolderName);
+
+		if (outputDir !== newPath && fs.existsSync(outputDir)) {
+			fs.renameSync(outputDir, newPath);
+		}
+
+		console.log(`\n📄 Raw transcript saved → ${transcriptPath}`);
+		console.log(`🧹 Cleaned transcript saved → ${cleanedPath}`);
+		console.log('\n---\n');
+		console.log('## Transcript\n');
+		console.log(cleanedText);
+	}
+}
