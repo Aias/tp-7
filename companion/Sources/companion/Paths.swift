@@ -14,6 +14,8 @@ enum Paths {
 		.homeDirectoryForCurrentUser
 		.appendingPathComponent("Music/recordings")
 
+	static let memosDir = recordingsDir.appendingPathComponent("memos")
+
 	static let logFile = FileManager.default
 		.homeDirectoryForCurrentUser
 		.appendingPathComponent("Library/Logs/tp7companion.log")

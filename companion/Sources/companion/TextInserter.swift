@@ -28,10 +28,19 @@ final class TextInserter {
 		Log.d("inserter: accessibility granted: \(Self.accessibilityGranted)")
 	}
 
+	/// Revisions deleting more than this many typed characters are deferred
+	/// to finalization, where they apply once instead of thrashing live.
+	private static let maxLiveRewrite = 12
+
 	/// Replaces the current utterance's text with `text`, minimally.
-	func update(to text: String) {
+	/// Non-final updates skip large rewrites; the finalized text applies
+	/// them in one pass.
+	func update(to text: String, isFinal: Bool) {
 		let common = inserted.commonPrefix(with: text)
 		let deletions = inserted.dropFirst(common.count)
+		if !isFinal && deletions.utf16.count > Self.maxLiveRewrite {
+			return
+		}
 		let additions = String(text.dropFirst(common.count))
 		if !deletions.isEmpty {
 			sendBackspaces(count: deletions.utf16.count)
