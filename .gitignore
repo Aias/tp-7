@@ -2,3 +2,4 @@ node_modules/
 src/transcriber/.env
 src/transcriber/transcription.config.local.ts
 .DS_Store
+.conductor/settings.local.toml

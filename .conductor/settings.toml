@@ -1,0 +1,11 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "bun install"
+run_mode = "nonconcurrent"
+
+[scripts.run.companion]
+available_in = [ "local" ]
+command = "swift run --package-path companion companion"
+default = true
+icon = "audio-lines"
