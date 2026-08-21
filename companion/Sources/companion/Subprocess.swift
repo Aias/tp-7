@@ -2,7 +2,8 @@ import Foundation
 
 enum Subprocess {
 	private static let path =
-		"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+		"\(NSHomeDirectory())/.bun/bin:"
+		+ "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 	/// Runs a command, returning stdout on success and nil on failure.
 	static func run(
@@ -19,6 +20,9 @@ enum Subprocess {
 				process.currentDirectoryURL = currentDirectory
 			}
 			let stdout = Pipe()
+			// Never inherit the terminal's stdin: a tool that reads it
+			// (ffmpeg) gets suspended by job control and hangs the caller.
+			process.standardInput = FileHandle.nullDevice
 			process.standardOutput = stdout
 			process.standardError = FileHandle.nullDevice
 			process.terminationHandler = { process in
@@ -41,7 +45,9 @@ enum Subprocess {
 		_ arguments: [String],
 		currentDirectory: URL? = nil
 	) async -> Bool {
-		FileManager.default.createFile(atPath: Paths.logFile.path, contents: nil)
+		if !FileManager.default.fileExists(atPath: Paths.logFile.path) {
+			FileManager.default.createFile(atPath: Paths.logFile.path, contents: nil)
+		}
 		guard let log = try? FileHandle(forWritingTo: Paths.logFile) else {
 			return false
 		}
@@ -55,6 +61,7 @@ enum Subprocess {
 			if let currentDirectory {
 				process.currentDirectoryURL = currentDirectory
 			}
+			process.standardInput = FileHandle.nullDevice
 			process.standardOutput = log
 			process.standardError = log
 			process.terminationHandler = { process in

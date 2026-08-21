@@ -8,6 +8,9 @@ enum DeviceState {
 	case control
 	case ingesting
 	case dictating
+	case meetingArmed
+	case meetingRecording
+	case meetingPaused
 
 	var symbolName: String {
 		switch self {
@@ -16,6 +19,9 @@ enum DeviceState {
 		case .control: "record.circle"
 		case .ingesting: "arrow.down.circle"
 		case .dictating: "waveform.circle"
+		case .meetingArmed: "smallcircle.filled.circle"
+		case .meetingRecording: "record.circle.fill"
+		case .meetingPaused: "pause.circle"
 		}
 	}
 
@@ -26,6 +32,9 @@ enum DeviceState {
 		case .control: "control mode"
 		case .ingesting: "ingesting…"
 		case .dictating: "dictating…"
+		case .meetingArmed: "meeting armed — play to start"
+		case .meetingRecording: "recording meeting…"
+		case .meetingPaused: "meeting paused"
 		}
 	}
 }

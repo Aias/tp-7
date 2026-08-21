@@ -16,6 +16,8 @@ enum Paths {
 
 	static let memosDir = recordingsDir.appendingPathComponent("memos")
 
+	static let meetingsDir = recordingsDir.appendingPathComponent("meetings")
+
 	static let logFile = FileManager.default
 		.homeDirectoryForCurrentUser
 		.appendingPathComponent("Library/Logs/tp7companion.log")

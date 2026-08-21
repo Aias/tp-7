@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var lastGesture: String?
 	private let inserter = TextInserter()
 	private var dictation: DictationSession?
+	private var meeting: MeetingSession?
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		statusItem = StatusItemController(
@@ -41,6 +42,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		case .presenceChanged(let present, _):
 			// The device drops off MIDI while it re-enumerates for MTP, so
 			// detach handling is suppressed mid-ingest.
+			if !present, let meeting {
+				self.meeting = nil
+				if meeting.phase == .armed {
+					meeting.cancel()
+				} else {
+					Notifier.post(
+						title: "TP-7 unplugged",
+						message: "Meeting capture ended.")
+					Task { await meeting.finish() }
+				}
+			}
 			if !present && devicePresent && gesturesSeen && !ingesting {
 				Notifier.post(
 					title: "TP-7 unplugged in ctrl mode",
@@ -58,19 +70,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		case .gesture(let gesture):
 			gesturesSeen = true
 			lastGesture = describe(gesture)
-			if case .button(.memo, let pressed) = gesture {
-				if pressed {
-					startDictation()
-				} else {
-					stopDictation()
-				}
+			if case .button(let button, let pressed) = gesture {
+				handle(button, pressed: pressed)
 			}
 		}
 		render()
 	}
 
+	private func handle(_ button: TP7Button, pressed: Bool) {
+		switch (button, pressed) {
+		case (.memo, true): startDictation()
+		case (.memo, false): stopDictation()
+		case (.rec, true): recPressed()
+		case (.play, true): playPressed()
+		case (.stop, true): stopPressed()
+		case (.plus, true): meeting?.marker("+")
+		case (.minus, true): meeting?.marker("−")
+		default: break
+		}
+	}
+
+	private func recPressed() {
+		if let meeting, meeting.phase == .armed {
+			meeting.cancel()
+			self.meeting = nil
+		} else if meeting == nil && dictation == nil && !ingesting {
+			meeting = MeetingSession()
+		}
+	}
+
+	private func playPressed() {
+		guard let meeting else { return }
+		switch meeting.phase {
+		case .armed:
+			Task {
+				do {
+					try await meeting.start()
+				} catch {
+					if self.meeting === meeting {
+						self.meeting = nil
+					}
+					Notifier.post(
+						title: "Meeting capture failed",
+						message: "Could not capture from the TP-7: \(error)")
+				}
+				render()
+			}
+		case .recording:
+			meeting.pause()
+		case .paused:
+			meeting.resume()
+		}
+	}
+
+	private func stopPressed() {
+		guard let meeting else { return }
+		self.meeting = nil
+		if meeting.phase == .armed {
+			meeting.cancel()
+		} else {
+			Task { await meeting.finish() }
+		}
+	}
+
 	private func startDictation() {
-		guard dictation == nil, !ingesting else { return }
+		guard dictation == nil, !ingesting, meeting == nil else { return }
 		let session = DictationSession(inserter: inserter)
 		dictation = session
 		Task {
@@ -157,6 +221,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var state: DeviceState {
 		if dictation != nil { return .dictating }
 		if ingesting { return .ingesting }
+		if let meeting {
+			switch meeting.phase {
+			case .armed: return .meetingArmed
+			case .recording: return .meetingRecording
+			case .paused: return .meetingPaused
+			}
+		}
 		if !devicePresent { return .absent }
 		return gesturesSeen ? .control : .recorder
 	}

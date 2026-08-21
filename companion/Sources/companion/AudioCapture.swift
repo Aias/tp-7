@@ -51,11 +51,12 @@ final class AudioCapture {
 	}
 
 	/// Starts capture from the given device, delivering buffers converted to
-	/// `outputFormat` and archiving the raw stream to `archiveURL`.
+	/// `outputFormat` and, when `archiveURL` is set, archiving the raw
+	/// hardware-format stream there.
 	func start(
 		device: AudioDeviceID,
 		outputFormat: AVAudioFormat,
-		archiveURL: URL,
+		archiveURL: URL?,
 		onBuffer: @escaping (AVAudioPCMBuffer) -> Void
 	) throws {
 		var deviceID = device
@@ -85,14 +86,16 @@ final class AudioCapture {
 		self.converter = converter
 		// AVAudioFile requires interleaved file settings; write() converts
 		// from the deinterleaved tap buffers.
-		archiveFile = try AVAudioFile(
-			forWriting: archiveURL,
-			settings: [
-				AVFormatIDKey: kAudioFormatLinearPCM,
-				AVSampleRateKey: hardwareFormat.sampleRate,
-				AVNumberOfChannelsKey: hardwareFormat.channelCount,
-				AVLinearPCMBitDepthKey: 24,
-			])
+		archiveFile = try archiveURL.map { url in
+			try AVAudioFile(
+				forWriting: url,
+				settings: [
+					AVFormatIDKey: kAudioFormatLinearPCM,
+					AVSampleRateKey: hardwareFormat.sampleRate,
+					AVNumberOfChannelsKey: hardwareFormat.channelCount,
+					AVLinearPCMBitDepthKey: 24,
+				])
+		}
 		bufferCount = 0
 
 		engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) {
