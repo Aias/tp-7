@@ -1,14 +1,30 @@
 import Foundation
 
 enum Paths {
-	/// The tp7sync repo root, derived from this source file's location.
-	/// Suitable for development builds run via `swift run`; a bundled app
-	/// will carry an explicit configuration instead.
-	static let repoRoot = URL(fileURLWithPath: #filePath)
-		.deletingLastPathComponent()  // companion/Sources/companion
-		.deletingLastPathComponent()  // companion/Sources
-		.deletingLastPathComponent()  // companion
-		.deletingLastPathComponent()  // repo root
+	private struct Config: Decodable {
+		let repoRoot: String
+	}
+
+	/// The tp7sync repo root. The installed app (bundled, so it has a
+	/// bundle identifier) reads `~/.config/tp7companion/config.json`,
+	/// written by the packaging script; a bare `swift run` build uses its
+	/// own checkout, derived from this source file's location, so
+	/// development always runs against the code it was built from.
+	static let repoRoot: URL = {
+		let configURL = FileManager.default.homeDirectoryForCurrentUser
+			.appendingPathComponent(".config/tp7companion/config.json")
+		if Bundle.main.bundleIdentifier != nil,
+			let data = try? Data(contentsOf: configURL),
+			let config = try? JSONDecoder().decode(Config.self, from: data)
+		{
+			return URL(fileURLWithPath: config.repoRoot)
+		}
+		return URL(fileURLWithPath: #filePath)
+			.deletingLastPathComponent()  // companion/Sources/companion
+			.deletingLastPathComponent()  // companion/Sources
+			.deletingLastPathComponent()  // companion
+			.deletingLastPathComponent()  // repo root
+	}()
 
 	static let recordingsDir = FileManager.default
 		.homeDirectoryForCurrentUser
