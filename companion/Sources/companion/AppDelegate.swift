@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				Log.d("model preparation failed: \(error)")
 			}
 		}
+		Task { await MeetingSession.recoverOrphans() }
 	}
 
 	private func handle(_ event: MIDIEvent) {

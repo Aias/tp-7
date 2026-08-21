@@ -50,6 +50,24 @@ final class AudioCapture {
 		return nil
 	}
 
+	/// The system default input device — the meeting fallback when the TP-7
+	/// isn't wired (BLE carries gestures but no audio).
+	static func defaultInputDevice() -> AudioDeviceID? {
+		var address = AudioObjectPropertyAddress(
+			mSelector: kAudioHardwarePropertyDefaultInputDevice,
+			mScope: kAudioObjectPropertyScopeGlobal,
+			mElement: kAudioObjectPropertyElementMain)
+		var device = AudioDeviceID(kAudioObjectUnknown)
+		var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+		guard
+			AudioObjectGetPropertyData(
+				AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
+				== noErr,
+			device != kAudioObjectUnknown
+		else { return nil }
+		return device
+	}
+
 	/// Starts capture from the given device, delivering buffers converted to
 	/// `outputFormat` and, when `archiveURL` is set, archiving the raw
 	/// hardware-format stream there.
@@ -80,8 +98,9 @@ final class AudioCapture {
 			throw CaptureError.converterUnavailable
 		}
 		// The default many-to-one channel mapping silently zeroes the signal;
-		// take channel 0, where the TP-7's mic lives (verified: mic occupies
-		// the first stereo pair, channels 2-5 are silent).
+		// take channel 0 — where the TP-7's mic lives (verified: the mic
+		// occupies the first stereo pair, channels 2-5 are silent), and the
+		// primary channel of any ordinary mic.
 		converter.channelMap = [0]
 		self.converter = converter
 		// AVAudioFile requires interleaved file settings; write() converts

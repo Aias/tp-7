@@ -41,10 +41,28 @@ final class MeetingSession {
 		let formatter = DateFormatter()
 		formatter.dateFormat = "yyyy-MM-dd_HHmmss"
 		stamp = formatter.string(from: Date())
-		micURL = Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting-mic.wav")
-		systemURL = Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting-system.wav")
-		mixedURL = Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting.wav")
-		markersURL = Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting-markers.md")
+		micURL = Self.micURL(for: stamp)
+		systemURL = Self.systemURL(for: stamp)
+		mixedURL = Self.mixedURL(for: stamp)
+		markersURL = Self.markersURL(for: stamp)
+	}
+
+	private static let micSuffix = "_meeting-mic.wav"
+
+	private static func micURL(for stamp: String) -> URL {
+		Paths.meetingsDir.appendingPathComponent("\(stamp)\(micSuffix)")
+	}
+
+	private static func systemURL(for stamp: String) -> URL {
+		Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting-system.wav")
+	}
+
+	private static func mixedURL(for stamp: String) -> URL {
+		Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting.wav")
+	}
+
+	private static func markersURL(for stamp: String) -> URL {
+		Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting-markers.md")
 	}
 
 	/// Elapsed captured audio (pauses excluded).
@@ -60,7 +78,18 @@ final class MeetingSession {
 
 	func start() async throws {
 		guard !cancelled else { return }
-		guard let device = AudioCapture.findTP7Device() else {
+		// The TP-7 mic when wired; over BLE (gestures only, no audio path)
+		// the Mac's default input keeps the room track alive.
+		let device: AudioDeviceID
+		if let tp7 = AudioCapture.findTP7Device() {
+			device = tp7
+		} else if let fallback = AudioCapture.defaultInputDevice() {
+			device = fallback
+			Log.d("meeting: TP-7 not on USB, capturing the default input device")
+			Notifier.post(
+				title: "Recording with the Mac microphone",
+				message: "The TP-7 isn't wired for audio; using the default input.")
+		} else {
 			throw MeetingError.deviceNotFound
 		}
 		guard
@@ -163,7 +192,14 @@ final class MeetingSession {
 		Notifier.post(
 			title: "Meeting captured",
 			message: "Transcribing \(Self.hms(duration)) of audio…")
-		let input = await mixTracks()
+		await Self.process(stamp: stamp)
+	}
+
+	/// Mixes a finished capture's tracks, runs the batch transcription
+	/// pipeline, and groups everything into the pipeline's titled folder.
+	/// Shared by the live Stop path and the launch-time recovery sweep.
+	static func process(stamp: String) async {
+		let input = await mixTracks(stamp: stamp)
 		let ok = await Subprocess.runLogged(
 			["bun", "src/cli.ts", "transcribe", input.path],
 			currentDirectory: Paths.repoRoot)
@@ -173,18 +209,88 @@ final class MeetingSession {
 				message: "Raw tracks are in meetings/; see tp7companion.log")
 			return
 		}
-		try? FileManager.default.removeItem(at: mixedURL)
-		let folder = groupArtifacts()
+		let folder = groupArtifacts(stamp: stamp)
 		Notifier.post(title: "Meeting transcribed", message: folder ?? stamp)
+	}
+
+	/// Captures the companion never finished processing — a quit or crash
+	/// mid-meeting, or a failed pipeline run — leave flat track files with
+	/// no transcript folder. Sweep them through the normal path.
+	static func recoverOrphans() async {
+		let manager = FileManager.default
+		guard
+			let entries = try? manager.contentsOfDirectory(
+				at: Paths.meetingsDir, includingPropertiesForKeys: nil)
+		else { return }
+		// Stray mixes whose capture is already fully grouped (a quit landed
+		// between the move and the delete) have no mic file to key off.
+		for url in entries where !url.hasDirectoryPath {
+			let name = url.lastPathComponent
+			guard name.hasSuffix("_meeting.wav") else { continue }
+			let stamp = String(name.dropLast("_meeting.wav".count))
+			if titledFolder(for: stamp) != nil, !manager.fileExists(atPath: micURL(for: stamp).path) {
+				try? manager.removeItem(at: url)
+			}
+		}
+		let stamps = entries
+			.filter { !$0.hasDirectoryPath && $0.lastPathComponent.hasSuffix(micSuffix) }
+			.map { String($0.lastPathComponent.dropLast(micSuffix.count)) }
+			.sorted()
+		for stamp in stamps {
+			// Transcribed but never grouped: just finish the grouping.
+			if titledFolder(for: stamp) != nil {
+				_ = groupArtifacts(stamp: stamp)
+				continue
+			}
+			// An interrupted capture's WAV header was never finalized;
+			// a stream-copy remux repairs it losslessly.
+			await repairHeader(micURL(for: stamp))
+			await repairHeader(systemURL(for: stamp))
+			guard let duration = await duration(of: micURL(for: stamp)),
+				duration >= minTranscribeSeconds
+			else {
+				Log.d("meeting: orphan \(stamp) too short, leaving as-is")
+				continue
+			}
+			Log.d("meeting: recovering orphaned capture \(stamp) (\(hms(duration)))")
+			Notifier.post(
+				title: "Recovering interrupted meeting",
+				message: "Transcribing \(hms(duration)) from \(stamp)…")
+			await process(stamp: stamp)
+		}
+	}
+
+	private static func repairHeader(_ url: URL) async {
+		guard FileManager.default.fileExists(atPath: url.path) else { return }
+		let temp = FileManager.default.temporaryDirectory
+			.appendingPathComponent(url.lastPathComponent)
+		let ok = await Subprocess.runLogged(
+			["ffmpeg", "-y", "-v", "error", "-i", url.path, "-c", "copy", temp.path])
+		guard ok else { return }
+		try? FileManager.default.removeItem(at: url)
+		try? FileManager.default.moveItem(at: temp, to: url)
+	}
+
+	private static func duration(of url: URL) async -> TimeInterval? {
+		let output = await Subprocess.run([
+			"ffprobe", "-v", "error", "-show_entries", "format=duration",
+			"-of", "csv=p=0", url.path,
+		])
+		return output.flatMap {
+			TimeInterval($0.trimmingCharacters(in: .whitespacesAndNewlines))
+		}
 	}
 
 	/// Downmixes system audio to mono and mixes it with the mic track.
 	/// Returns the pipeline input: the mix, or the mic track alone when
 	/// system audio was never captured (or the mix failed).
-	private func mixTracks() async -> URL {
+	private static func mixTracks(stamp: String) async -> URL {
+		let micURL = micURL(for: stamp)
+		let systemURL = systemURL(for: stamp)
 		guard FileManager.default.fileExists(atPath: systemURL.path) else {
 			return micURL
 		}
+		let mixedURL = mixedURL(for: stamp)
 		let mixed = await Subprocess.runLogged(
 			[
 				"ffmpeg", "-y", "-i", micURL.path, "-i", systemURL.path,
@@ -207,21 +313,28 @@ final class MeetingSession {
 	}
 
 	/// The pipeline names its output folder `YYYY-MM-DD_HHMM-<title>` from
-	/// the input filename; move the raw tracks and markers in with it.
-	private func groupArtifacts() -> String? {
+	/// the input filename.
+	private static func titledFolder(for stamp: String) -> URL? {
 		let prefix = String(stamp.prefix("yyyy-MM-dd_HHmm".count))
-		let manager = FileManager.default
-		guard
-			let entries = try? manager.contentsOfDirectory(
-				at: Paths.meetingsDir, includingPropertiesForKeys: [.isDirectoryKey]),
-			let folder = entries.first(where: { url in
-				url.hasDirectoryPath && url.lastPathComponent.hasPrefix(prefix)
-			})
-		else {
-			Log.d("meeting: no pipeline folder matching \(prefix), leaving tracks flat")
+		let entries = try? FileManager.default.contentsOfDirectory(
+			at: Paths.meetingsDir, includingPropertiesForKeys: [.isDirectoryKey])
+		return entries?.first { url in
+			url.hasDirectoryPath && url.lastPathComponent.hasPrefix(prefix)
+		}
+	}
+
+	/// Moves the raw tracks and markers into the pipeline's titled folder.
+	/// The mix is derived (regenerated on demand), so it's dropped rather
+	/// than kept.
+	private static func groupArtifacts(stamp: String) -> String? {
+		try? FileManager.default.removeItem(at: mixedURL(for: stamp))
+		guard let folder = titledFolder(for: stamp) else {
+			Log.d("meeting: no pipeline folder for \(stamp), leaving tracks flat")
 			return nil
 		}
-		for url in [micURL, systemURL, markersURL] where manager.fileExists(atPath: url.path) {
+		let manager = FileManager.default
+		for url in [micURL(for: stamp), systemURL(for: stamp), markersURL(for: stamp)]
+		where manager.fileExists(atPath: url.path) {
 			try? manager.moveItem(
 				at: url, to: folder.appendingPathComponent(url.lastPathComponent))
 		}
