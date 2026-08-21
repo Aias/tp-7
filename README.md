@@ -50,6 +50,10 @@ To run the watcher at login:
 
 Logs land in `~/Library/Logs/tp7sync.log`.
 
+## Companion app
+
+`companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
+
 ## Caveats
 
 - Switching to MTP briefly takes the device offline as an audio interface. The watcher therefore only auto-ingests when the device is first plugged in, never mid-session; run `bun run now` to ingest on demand while it stays connected.
@@ -57,7 +61,6 @@ Logs land in `~/Library/Logs/tp7sync.log`.
 
 ## Roadmap
 
-- Live meeting capture: record directly from the TP-7's audio interface (ffmpeg/CoreAudio) so transcription starts without a file transfer.
 - Safe periodic ingest while attached, gated on the audio interface being idle (CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere`).
 - Programmatic record control over MIDI/BLE (see [tp7-midi](https://github.com/lucidyan/tp7-midi) for the reverse-engineered CC map).
 - A minimal monospace TUI for browsing recordings and transcripts.
