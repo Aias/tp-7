@@ -54,6 +54,14 @@ Logs land in `~/Library/Logs/tp7sync.log`.
 
 `companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
 
+To install it as a real app:
+
+```sh
+./scripts/package-app.sh   # builds release, signs, installs /Applications/TP-7 Companion.app
+```
+
+The installed app reads the repo location from `~/.config/tp7companion/config.json` (written on first package) and needs that checkout to have `bun install` run and the transcriber's per-machine files in place. Development builds via `swift run` always use their own checkout instead.
+
 ## Caveats
 
 - Switching to MTP briefly takes the device offline as an audio interface. The watcher therefore only auto-ingests when the device is first plugged in, never mid-session; run `bun run now` to ingest on demand while it stays connected.
