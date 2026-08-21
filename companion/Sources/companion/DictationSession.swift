@@ -26,24 +26,28 @@ final class DictationSession {
 		audioURL = audioDir.appendingPathComponent("\(Self.timestamp())-dictation.wav")
 	}
 
-	/// Ensures the on-device transcription model is installed.
+	/// Ensures the on-device transcription model is installed. The model
+	/// store is system-wide; when the locale's assets are already present,
+	/// skip the per-app allocation request (a bare SwiftPM executable has
+	/// no persistent identity, so the request would repeat every launch).
 	static func prepareModel() async throws {
 		let locale = Locale.current
-		let supported = await SpeechTranscriber.supportedLocales
-		Log.d(
-			"model: locale \(locale.identifier), supported: "
-				+ supported.map(\.identifier).joined(separator: " "))
+		let installed = await SpeechTranscriber.installedLocales
+		if installed.contains(where: { $0.identifier == locale.identifier }) {
+			Log.d("model: ready (\(locale.identifier))")
+			return
+		}
 		let transcriber = SpeechTranscriber(
 			locale: locale, transcriptionOptions: [],
 			reportingOptions: [.volatileResults], attributeOptions: [])
 		if let request = try await AssetInventory.assetInstallationRequest(
 			supporting: [transcriber])
 		{
-			Log.d("model: downloading…")
+			Log.d("model: downloading for \(locale.identifier)…")
 			try await request.downloadAndInstall()
 			Log.d("model: installed")
 		} else {
-			Log.d("model: already installed")
+			Log.d("model: ready (\(locale.identifier))")
 		}
 	}
 

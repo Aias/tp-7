@@ -105,7 +105,7 @@ The ctrl-mode trade (controls decouple from the tape) resolves into two postures
 
 - **At the desk (ctrl mode): the Mac is the recorder.** The docked posture requires two device settings: MIDI=`ctrl` (gestures) and **THRU=on** — without THRU the mic never reaches the USB outputs and the Mac captures digital silence (bench-verified at −91 dB). With both set, capture lands directly in the archive and all gestures drive the Mac. The mic occupies USB channels 0/1; channels 2–5 are silent.
 - **Away (normal mode): the device is the recorder.** Memos and recordings land on internal storage; the next dock auto-ingests them. The separate-`/memo`-folder firmware setting keeps memos apart from long recordings.
-- **Wireless (ctrl mode over BLE):** the full control surface works from across the room, but no audio path exists — a remote trigger for Mac-mic capture only.
+- **Wireless (ctrl mode over BLE):** the full control surface works from across the room, but no audio path exists. Meeting capture falls back to the Mac's default input, so the TP-7 acts as a remote trigger with the Mac mic as the room track; dictation and ingest stay wired-only.
 
 The dock/undock mode flip is currently a one-toggle on-device step; the menu bar always shows which posture is active. Whether the TE SysEx mode command can flip the MIDI setting remotely (making docking fully automatic) is a Phase 0 investigation.
 
@@ -115,7 +115,7 @@ Memo hold (CC 27 press) starts capture from the TP-7 mic over USB; release ends 
 
 ## Meetings
 
-The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: **Rec arms, Play starts, Stop ends, Play toggles pause** while capturing. Capture is the TP-7 mic; when meeting audio is playing on the Mac (Zoom/Meet), system audio is captured via ScreenCaptureKit as a **separate track** — mixed only at transcription time, so speaker bleed into the room mic can't echo or double voices. The official output is the post-meeting artifact: full recording plus the AssemblyAI/OpenAI pipeline transcript, kicked off at Stop and ready minutes later. A live rolling transcript view is a later addition — the streaming pipeline exists for dictation, so the design keeps the door open, but no meeting UI depends on it.
+The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: **Rec arms, Play starts, Stop ends, Play toggles pause** while capturing. Capture is the TP-7 mic when wired, falling back to the Mac's default input when the device is connected over BLE only; when meeting audio is playing on the Mac (Zoom/Meet), system audio is captured via ScreenCaptureKit as a **separate track** — mixed only at transcription time, so speaker bleed into the room mic can't echo or double voices. The official output is the post-meeting artifact: full recording plus the AssemblyAI/OpenAI pipeline transcript, kicked off at Stop and ready minutes later. A live rolling transcript view is a later addition — the streaming pipeline exists for dictation, so the design keeps the door open, but no meeting UI depends on it.
 
 ## Phase 0 — remaining bench unknowns (blocking design details, not the direction)
 
