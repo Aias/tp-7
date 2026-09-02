@@ -18,8 +18,8 @@ final class MeetingSession {
 	private var cancelled = false
 
 	private static let sampleRate = 48_000.0
-	/// Captures shorter than this are kept as raw tracks but not transcribed.
-	private static let minTranscribeSeconds = 10.0
+	/// Captures shorter than this are button tests, not meetings, and are deleted.
+	private static let minTranscribeSeconds = 5.0
 
 	private let capture = AudioCapture()
 	private let systemAudio = SystemAudioCapture()
@@ -45,6 +45,7 @@ final class MeetingSession {
 		systemURL = Self.systemURL(for: stamp)
 		mixedURL = Self.mixedURL(for: stamp)
 		markersURL = Self.markersURL(for: stamp)
+		Log.d("meeting: armed \(stamp)")
 	}
 
 	private static let micSuffix = "_meeting-mic.wav"
@@ -74,6 +75,7 @@ final class MeetingSession {
 	/// start unwinds its own capture when it reaches the flag.
 	func cancel() {
 		cancelled = true
+		Log.d("meeting: disarmed \(stamp)")
 	}
 
 	func start() async throws {
@@ -141,6 +143,7 @@ final class MeetingSession {
 		}
 		// Stop/Rec/unplug may have disarmed while system audio was starting.
 		if cancelled {
+			Log.d("meeting: start cancelled, discarding \(stamp)")
 			capture.stop()
 			await systemAudio.stop()
 			micFile = nil
@@ -181,14 +184,15 @@ final class MeetingSession {
 		await systemAudio.stop()
 		micFile = nil
 		systemFile = nil
-		writeMarkers()
 		Log.d("meeting: finished, \(Self.hms(duration)) captured, \(markers.count) markers")
 		guard duration >= Self.minTranscribeSeconds else {
+			Self.discard(stamp: stamp)
 			Notifier.post(
-				title: "Meeting too short",
-				message: "Kept the raw tracks in meetings/, skipped transcription.")
+				title: "Meeting discarded",
+				message: "Captures under \(Int(Self.minTranscribeSeconds)) seconds are dropped.")
 			return
 		}
+		writeMarkers()
 		Notifier.post(
 			title: "Meeting captured",
 			message: "Transcribing \(Self.hms(duration)) of audio…")
@@ -246,10 +250,13 @@ final class MeetingSession {
 			// a stream-copy remux repairs it losslessly.
 			await repairHeader(micURL(for: stamp))
 			await repairHeader(systemURL(for: stamp))
-			guard let duration = await duration(of: micURL(for: stamp)),
-				duration >= minTranscribeSeconds
-			else {
-				Log.d("meeting: orphan \(stamp) too short, leaving as-is")
+			guard let duration = await duration(of: micURL(for: stamp)) else {
+				Log.d("meeting: orphan \(stamp) unreadable, leaving as-is")
+				continue
+			}
+			guard duration >= minTranscribeSeconds else {
+				Log.d("meeting: orphan \(stamp) too short (\(hms(duration))), discarding")
+				discard(stamp: stamp)
 				continue
 			}
 			Log.d("meeting: recovering orphaned capture \(stamp) (\(hms(duration)))")
@@ -257,6 +264,16 @@ final class MeetingSession {
 				title: "Recovering interrupted meeting",
 				message: "Transcribing \(hms(duration)) from \(stamp)…")
 			await process(stamp: stamp)
+		}
+	}
+
+	private static func discard(stamp: String) {
+		let urls = [
+			micURL(for: stamp), systemURL(for: stamp),
+			mixedURL(for: stamp), markersURL(for: stamp),
+		]
+		for url in urls {
+			try? FileManager.default.removeItem(at: url)
 		}
 	}
 

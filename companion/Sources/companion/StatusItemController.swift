@@ -16,7 +16,7 @@ enum DeviceState {
 		switch self {
 		case .absent: "circle.dotted"
 		case .recorder: "circle"
-		case .control: "record.circle"
+		case .control: "circle"
 		case .ingesting: "arrow.down.circle"
 		case .dictating: "waveform.circle"
 		case .meetingArmed: "smallcircle.filled.circle"
