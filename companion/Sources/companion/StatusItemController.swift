@@ -1,6 +1,6 @@
 import AppKit
 
-enum DeviceState {
+enum DeviceState: Equatable {
 	case absent
 	/// Device present, no gestures seen — MIDI is off or not in ctrl mode.
 	case recorder
@@ -11,7 +11,7 @@ enum DeviceState {
 	case meetingArmed
 	case meetingRecording
 	case meetingPaused
-	case agentRequest
+	case agentRequest(AgentVerb)
 
 	var symbolName: String {
 		switch self {
@@ -37,7 +37,8 @@ enum DeviceState {
 		case .meetingArmed: "meeting armed — play to start"
 		case .meetingRecording: "recording meeting…"
 		case .meetingPaused: "meeting paused"
-		case .agentRequest: "agent request — hold memo to add words"
+		case .agentRequest(let verb):
+			"\(verb.rawValue) request — hold memo to speak, same button to cancel"
 		}
 	}
 }

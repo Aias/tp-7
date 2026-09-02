@@ -163,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				pendingRequest = (verb, pending.context)
 				Log.d("agent: request switched to \(verb.rawValue)")
 				armRequestTimer()
+				render()
 			}
 			return
 		}
@@ -344,7 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	private var state: DeviceState {
-		if pendingRequest != nil { return .agentRequest }
+		if let pending = pendingRequest { return .agentRequest(pending.verb) }
 		if dictation != nil { return .dictating }
 		if ingesting { return .ingesting }
 		if let meeting {
