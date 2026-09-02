@@ -313,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private func describe(_ gesture: Gesture) -> String {
 		switch gesture {
 		case .button(let button, let pressed):
-			"\(button.label) \(pressed ? "down" : "up")"
+			"\(button.label) \(pressed ? "pressed" : "released")"
 		case .wheel(let delta):
 			"wheel \(delta > 0 ? "+" : "")\(delta)"
 		case .rocker(let value):

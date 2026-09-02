@@ -17,7 +17,8 @@ enum AgentVerb: String {
 /// is written next to the recordings and an interactive session opens in
 /// Ghostty so the conversation stays visible and steerable. The target
 /// project is never known up front; the session infers it from the brief
-/// and confirms before touching a repo.
+/// and confirms before touching a repo. Ghostty's `-e` runs the command
+/// bare, so a login-interactive zsh supplies the user's PATH.
 @MainActor
 enum AgentRequest {
 	private static let briefsDir = Paths.recordingsDir.appendingPathComponent("agent")
@@ -48,7 +49,7 @@ enum AgentRequest {
 			"""
 		let opened = await Subprocess.run([
 			"open", "-na", "Ghostty.app", "--args",
-			"-e", "sh", "-c", "cd \"$HOME\" && exec claude \"$1\"", "tp7-agent", prompt,
+			"-e", "zsh", "-lic", "cd \"$HOME\" && exec claude \"$1\"", "tp7-agent", prompt,
 		])
 		Log.d("agent: \(verb.rawValue) request → \(brief.lastPathComponent)")
 		Notifier.post(
