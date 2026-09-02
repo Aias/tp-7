@@ -152,10 +152,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	/// transcript so far) and any words spoken on memo within the window.
 	private func beginRequest(_ verb: AgentVerb) {
 		if let pending = pendingRequest {
-			guard pending.verb != verb, instruction == nil else { return }
-			pendingRequest = (verb, pending.context)
-			Log.d("agent: request switched to \(verb.rawValue)")
-			armRequestTimer()
+			guard instruction == nil else { return }
+			if pending.verb == verb {
+				pendingRequest = nil
+				requestTimer?.invalidate()
+				requestTimer = nil
+				Log.d("agent: request cancelled")
+				render()
+			} else {
+				pendingRequest = (verb, pending.context)
+				Log.d("agent: request switched to \(verb.rawValue)")
+				armRequestTimer()
+			}
 			return
 		}
 		guard dictation == nil, !ingesting else { return }
@@ -168,8 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
-	/// Tapping the other side button within the window switches the verb
-	/// and restarts the clock.
+	/// Within the window, the other side button switches the verb and
+	/// restarts the clock; the same button again cancels the request.
 	private func armRequestTimer() {
 		requestTimer?.invalidate()
 		requestTimer = Timer.scheduledTimer(
