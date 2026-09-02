@@ -130,8 +130,8 @@ The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: 
 2. **Gestures** — CoreMIDI listener for ctrl-mode CCs; recording indicator inferred from Rec/Memo presses; gesture log in the archive DB.
 3. **Dictation** — memo-hold → AVAudioEngine capture → SpeechTranscriber live → insert at cursor; memo audio + transcript archived to `recordings/memos/` and the DB.
 4. **Meetings** — live rolling transcript from the USB feed during meetings; batch diarization/summary pass afterwards through the existing pipeline; both linked in the DB.
-5. **Search** — GRDB/FTS5 archive over everything ever captured; SwiftUI search window (bm25 + snippets, click-to-seek into audio); TUI equivalent optional.
-6. **Control profiles** — wheel/rocker/button mappings to app actions (scrolling, agent sessions, media). Plugin-shaped.
+5. **Control profiles** — wheel/rocker/button mappings to app actions (scrolling, agent sessions, media). Plugin-shaped.
+6. **Search** — GRDB/FTS5 archive over everything ever captured; SwiftUI search window (bm25 + snippets, click-to-seek into audio). Deferred behind everything real-time: the value of this project is in capture and the minutes after Stop, and retrieval can wait until the archive has enough in it to need it.
 
 ## Settled decisions
 
@@ -141,4 +141,5 @@ The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: 
 - The AssemblyAI/OpenAI pipeline stays as the official transcript path — state of the art over on-device. Local engines (SpeechTranscriber, FluidAudio) serve the live/latency layer only.
 - Device retention: recordings are auto-deleted from the TP-7 once pulled, size-verified, transcribed, and archived — the archive is the single source of truth and the device stays empty. (tp7sync does not delete yet; this is destination behavior.)
 - Search archive is standalone (SQLite/FTS5, owned by this app); red-cliff-record integration is a later export once the shape settles.
-- Priorities: dictation and meetings are the destination; the shell and gesture layers exist to support them.
+- Priorities: dictation and meetings are the destination; the shell and gesture layers exist to support them. Real-time and immediately-post-capture improvements outrank archive and search work.
+- Every capture is stamped with its context (frontmost app, focused window, document and git branch when the window exposes them) so the archive can answer "what was I doing when I said this" without any calendar or agent integration.

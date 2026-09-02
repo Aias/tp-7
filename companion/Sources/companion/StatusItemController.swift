@@ -54,7 +54,7 @@ final class StatusItemController {
 	init(onIngestNow: @escaping () -> Void, onBrowseDevice: @escaping () -> Void) {
 		self.onIngestNow = onIngestNow
 		self.onBrowseDevice = onBrowseDevice
-		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 		ingestItem = NSMenuItem(title: "Ingest Now", action: nil, keyEquivalent: "i")
 		browseItem = NSMenuItem(title: "List Device Files", action: nil, keyEquivalent: "")
 		let menu = NSMenu()
@@ -84,12 +84,17 @@ final class StatusItemController {
 		statusItem.menu = menu
 	}
 
-	func update(state: DeviceState, identity: DeviceInfo?, lastGesture: String?) {
+	func update(
+		state: DeviceState, identity: DeviceInfo?, lastGesture: String?,
+		elapsed: TimeInterval?
+	) {
 		if let button = statusItem.button {
 			let image = NSImage(
 				systemSymbolName: state.symbolName, accessibilityDescription: "TP-7")
 			image?.isTemplate = true
 			button.image = image
+			button.imagePosition = .imageLeading
+			button.title = elapsed.map { " " + Self.clock($0) } ?? ""
 		}
 		let deviceLine: String
 		if let identity {
@@ -107,6 +112,13 @@ final class StatusItemController {
 		let deviceAvailable = state == .recorder || state == .control
 		ingestItem.isEnabled = deviceAvailable
 		browseItem.isEnabled = deviceAvailable
+	}
+
+	private static func clock(_ seconds: TimeInterval) -> String {
+		let total = Int(seconds)
+		return total >= 3600
+			? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+			: String(format: "%d:%02d", total / 60, total % 60)
 	}
 
 	@objc private func ingestNow() {

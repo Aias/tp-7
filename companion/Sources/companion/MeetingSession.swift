@@ -28,6 +28,7 @@ final class MeetingSession {
 	private let systemURL: URL
 	private let mixedURL: URL
 	private let markersURL: URL
+	private let contextURL: URL
 	private var markers: [(time: TimeInterval, label: String)] = []
 
 	// Files are each touched from a single capture thread; the flags are
@@ -45,6 +46,7 @@ final class MeetingSession {
 		systemURL = Self.systemURL(for: stamp)
 		mixedURL = Self.mixedURL(for: stamp)
 		markersURL = Self.markersURL(for: stamp)
+		contextURL = Self.contextURL(for: stamp)
 		Log.d("meeting: armed \(stamp)")
 	}
 
@@ -66,6 +68,10 @@ final class MeetingSession {
 		Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting-markers.md")
 	}
 
+	private static func contextURL(for stamp: String) -> URL {
+		Paths.meetingsDir.appendingPathComponent("\(stamp)_meeting-context.md")
+	}
+
 	/// Elapsed captured audio (pauses excluded).
 	var elapsed: TimeInterval {
 		Double(micFramesWritten) / Self.sampleRate
@@ -80,6 +86,7 @@ final class MeetingSession {
 
 	func start() async throws {
 		guard !cancelled else { return }
+		let context = await CaptureContext.current()
 		// The TP-7 mic when wired; over BLE (gestures only, no audio path)
 		// the Mac's default input keeps the room track alive.
 		let device: AudioDeviceID
@@ -102,6 +109,7 @@ final class MeetingSession {
 		}
 		try FileManager.default.createDirectory(
 			at: Paths.meetingsDir, withIntermediateDirectories: true)
+		writeContext(context)
 		micFile = try AVAudioFile(
 			forWriting: micURL,
 			settings: [
@@ -150,6 +158,7 @@ final class MeetingSession {
 			systemFile = nil
 			try? FileManager.default.removeItem(at: micURL)
 			try? FileManager.default.removeItem(at: systemURL)
+			try? FileManager.default.removeItem(at: contextURL)
 			return
 		}
 		phase = .recording
@@ -213,8 +222,32 @@ final class MeetingSession {
 				message: "Raw tracks are in meetings/; see tp7companion.log")
 			return
 		}
-		let folder = groupArtifacts(stamp: stamp)
-		Notifier.post(title: "Meeting transcribed", message: folder ?? stamp)
+		guard let folder = groupArtifacts(stamp: stamp) else {
+			Notifier.post(title: "Meeting transcribed", message: stamp)
+			return
+		}
+		let transcript = folder.appendingPathComponent("\(folder.lastPathComponent)-transcript.md")
+		Notifier.post(
+			title: title(of: folder), message: summaryLead(of: transcript), opening: transcript)
+	}
+
+	/// The pipeline's folder is `YYYY-MM-DD_HHMM-<kebab-title>`.
+	private static func title(of folder: URL) -> String {
+		let slug = folder.lastPathComponent.dropFirst("yyyy-MM-dd_HHmm-".count)
+		let words = slug.replacingOccurrences(of: "-", with: " ")
+		return words.prefix(1).uppercased() + words.dropFirst()
+	}
+
+	/// The first paragraph of the transcript file's summary section.
+	private static func summaryLead(of transcript: URL) -> String {
+		guard let text = try? String(contentsOf: transcript, encoding: .utf8) else {
+			return "Transcript ready."
+		}
+		let body = text.replacingOccurrences(of: "## Summary", with: "")
+		let paragraph = body.components(separatedBy: "\n\n")
+			.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+			.first { !$0.isEmpty } ?? "Transcript ready."
+		return paragraph.count > 240 ? String(paragraph.prefix(237)) + "…" : paragraph
 	}
 
 	/// Captures the companion never finished processing — a quit or crash
@@ -269,8 +302,8 @@ final class MeetingSession {
 
 	private static func discard(stamp: String) {
 		let urls = [
-			micURL(for: stamp), systemURL(for: stamp),
-			mixedURL(for: stamp), markersURL(for: stamp),
+			micURL(for: stamp), systemURL(for: stamp), mixedURL(for: stamp),
+			markersURL(for: stamp), contextURL(for: stamp),
 		]
 		for url in urls {
 			try? FileManager.default.removeItem(at: url)
@@ -322,6 +355,13 @@ final class MeetingSession {
 		return mixed ? mixedURL : micURL
 	}
 
+	private func writeContext(_ context: CaptureContext) {
+		let started = ISO8601DateFormatter().string(from: Date())
+		let lines = ["- started: \(started)"] + context.markdownLines
+		let content = "# Context\n\n" + lines.joined(separator: "\n") + "\n"
+		try? content.write(to: contextURL, atomically: true, encoding: .utf8)
+	}
+
 	private func writeMarkers() {
 		guard !markers.isEmpty else { return }
 		let lines = markers.map { "- \(Self.hms($0.time)) \($0.label)" }
@@ -340,22 +380,25 @@ final class MeetingSession {
 		}
 	}
 
-	/// Moves the raw tracks and markers into the pipeline's titled folder.
-	/// The mix is derived (regenerated on demand), so it's dropped rather
-	/// than kept.
-	private static func groupArtifacts(stamp: String) -> String? {
+	/// Moves the raw tracks, markers, and context into the pipeline's
+	/// titled folder. The mix is derived (regenerated on demand), so it's
+	/// dropped rather than kept.
+	private static func groupArtifacts(stamp: String) -> URL? {
 		try? FileManager.default.removeItem(at: mixedURL(for: stamp))
 		guard let folder = titledFolder(for: stamp) else {
 			Log.d("meeting: no pipeline folder for \(stamp), leaving tracks flat")
 			return nil
 		}
 		let manager = FileManager.default
-		for url in [micURL(for: stamp), systemURL(for: stamp), markersURL(for: stamp)]
-		where manager.fileExists(atPath: url.path) {
+		let artifacts = [
+			micURL(for: stamp), systemURL(for: stamp),
+			markersURL(for: stamp), contextURL(for: stamp),
+		]
+		for url in artifacts where manager.fileExists(atPath: url.path) {
 			try? manager.moveItem(
 				at: url, to: folder.appendingPathComponent(url.lastPathComponent))
 		}
-		return folder.lastPathComponent
+		return folder
 	}
 
 	private static func hms(_ seconds: TimeInterval) -> String {

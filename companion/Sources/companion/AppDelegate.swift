@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private let inserter = TextInserter()
 	private var dictation: DictationSession?
 	private var meeting: MeetingSession?
+	private var clock: Timer?
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		statusItem = StatusItemController(
@@ -23,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 		self.midi = midi
 		midi.start()
+		Notifier.prepare()
 		if !TextInserter.accessibilityGranted {
 			TextInserter.requestAccessibility()
 		}
@@ -233,7 +235,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		return gesturesSeen ? .control : .recorder
 	}
 
+	/// Elapsed capture time shows beside the icon while a meeting is
+	/// recording or paused; a one-second timer keeps it ticking.
 	private func render() {
-		statusItem?.update(state: state, identity: identity, lastGesture: lastGesture)
+		let elapsed = meeting.flatMap { $0.phase == .armed ? nil : $0.elapsed }
+		statusItem?.update(
+			state: state, identity: identity, lastGesture: lastGesture, elapsed: elapsed)
+		let ticking = meeting?.phase == .recording
+		if ticking && clock == nil {
+			clock = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+				Task { @MainActor in self?.render() }
+			}
+		} else if !ticking, let clock {
+			clock.invalidate()
+			self.clock = nil
+		}
 	}
 }

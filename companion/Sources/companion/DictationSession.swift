@@ -17,6 +17,7 @@ final class DictationSession {
 	private var volatileText = ""
 	private var previousVolatile = ""
 	private let audioURL: URL
+	private var context: Task<CaptureContext, Never>?
 
 	init(inserter: TextInserter) {
 		self.inserter = inserter
@@ -55,6 +56,7 @@ final class DictationSession {
 		guard let device = AudioCapture.findTP7Device() else {
 			throw DictationError.deviceNotFound
 		}
+		context = Task { await CaptureContext.current() }
 		let transcriber = SpeechTranscriber(
 			locale: Locale.current, transcriptionOptions: [],
 			reportingOptions: [.volatileResults], attributeOptions: [])
@@ -124,18 +126,19 @@ final class DictationSession {
 		Log.d("dictation: finished, \(text.count) chars → \(audioURL.lastPathComponent)")
 		inserter.endUtterance()
 		if !text.isEmpty {
-			appendToDailyJournal(text)
+			appendToDailyJournal(text, context: await context?.value)
 		}
 		return text
 	}
 
 	/// Memos accumulate into one markdown file per day; audio lives in the
 	/// audio/ subfolder.
-	private func appendToDailyJournal(_ text: String) {
+	private func appendToDailyJournal(_ text: String, context: CaptureContext?) {
 		let day = Self.dayStamp()
 		let journalURL = Paths.memosDir.appendingPathComponent("\(day).md")
 		let time = Self.timeStamp()
-		let entry = "## \(time)\n\n\(text)\n\n"
+		let heading = context?.summary.map { "## \(time) · \($0)" } ?? "## \(time)"
+		let entry = "\(heading)\n\n\(text)\n\n"
 		do {
 			if let handle = try? FileHandle(forWritingTo: journalURL) {
 				handle.seekToEndOfFile()
