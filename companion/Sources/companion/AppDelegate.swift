@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var pendingRequest: (verb: AgentVerb, context: CaptureContext)?
 	private var requestTimer: Timer?
 	private var instruction: DictationSession?
+	/// Meetings being mixed and transcribed after Stop (or recovered at launch).
+	private var processing = 0
 
 	/// After a side-button tap, a memo hold within this window attaches a
 	/// spoken instruction; otherwise the request goes out as-is.
@@ -46,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				Log.d("model preparation failed: \(error)")
 			}
 		}
-		Task { await MeetingSession.recoverOrphans() }
+		process { await MeetingSession.recoverOrphans() }
 	}
 
 	private func handle(_ event: MIDIEvent) {
@@ -62,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 					Notifier.post(
 						title: "TP-7 unplugged",
 						message: "Meeting capture ended.")
-					Task { await meeting.finish() }
+					process { await meeting.finish() }
 				}
 			}
 			if !present && devicePresent && gesturesSeen && !ingesting {
@@ -202,6 +204,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
+	private func process(_ work: @escaping @MainActor () async -> Void) {
+		processing += 1
+		render()
+		Task {
+			await work()
+			processing -= 1
+			render()
+		}
+	}
+
 	private func startInstruction() {
 		let session = DictationSession(inserter: nil)
 		instruction = session
@@ -255,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		if meeting.phase == .armed {
 			meeting.cancel()
 		} else {
-			Task { await meeting.finish() }
+			process { await meeting.finish() }
 		}
 	}
 
@@ -348,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		if let pending = pendingRequest { return .agentRequest(pending.verb) }
 		if dictation != nil { return .dictating }
 		if ingesting { return .ingesting }
+		if processing > 0 { return .processing }
 		if let meeting {
 			switch meeting.phase {
 			case .armed: return .meetingArmed

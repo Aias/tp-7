@@ -7,6 +7,7 @@ enum DeviceState: Equatable {
 	/// Device present and gesture events are flowing (MIDI=ctrl).
 	case control
 	case ingesting
+	case processing
 	case dictating
 	case meetingArmed
 	case meetingRecording
@@ -19,6 +20,7 @@ enum DeviceState: Equatable {
 		case .recorder: "circle"
 		case .control: "circle"
 		case .ingesting: "arrow.down.circle"
+		case .processing: "ellipsis.circle"
 		case .dictating: "waveform.circle"
 		case .meetingArmed: "smallcircle.filled.circle"
 		case .meetingRecording: "record.circle.fill"
@@ -33,6 +35,7 @@ enum DeviceState: Equatable {
 		case .recorder: "recorder mode"
 		case .control: "control mode"
 		case .ingesting: "ingesting…"
+		case .processing: "transcribing meeting…"
 		case .dictating: "dictating…"
 		case .meetingArmed: "meeting armed — play to start"
 		case .meetingRecording: "recording meeting…"
@@ -118,7 +121,7 @@ final class StatusItemController {
 		if let lastGesture {
 			gestureItem.title = "last gesture: \(lastGesture)"
 		}
-		let deviceAvailable = state == .recorder || state == .control
+		let deviceAvailable = state == .recorder || state == .control || state == .processing
 		ingestItem.isEnabled = deviceAvailable
 		browseItem.isEnabled = deviceAvailable
 	}
