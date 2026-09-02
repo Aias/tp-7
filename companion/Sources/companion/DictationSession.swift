@@ -1,5 +1,5 @@
 import AVFoundation
-import Foundation
+import AppKit
 import Speech
 
 /// One memo-hold dictation: captures the TP-7 mic, streams it through the
@@ -124,12 +124,42 @@ final class DictationSession {
 		let text = (finalizedText + volatileText)
 			.trimmingCharacters(in: .whitespacesAndNewlines)
 		Log.d("dictation: finished, \(text.count) chars → \(audioURL.lastPathComponent)")
+		let context = await context?.value
+		let cleaned = text.isEmpty ? text : await cleanup(text, context: context)
 		inserter.endUtterance()
-		if !text.isEmpty {
-			appendToDailyJournal(text, context: await context?.value)
+		if !cleaned.isEmpty {
+			appendToDailyJournal(cleaned, context: context)
 		}
-		return text
+		return cleaned
 	}
+
+	/// Replaces the typed utterance with a cleaned version (fillers,
+	/// stutters, punctuation) from the pipeline's editing prompt. The
+	/// rewrite is skipped when focus has moved on or the call took too
+	/// long, since the inserter can only retype what it just typed.
+	private func cleanup(_ text: String, context: CaptureContext?) async -> String {
+		let started = Date()
+		guard
+			let cleaned = await Subprocess.run(
+				["bun", "src/cli.ts", "clean", text], currentDirectory: Paths.repoRoot)?
+				.trimmingCharacters(in: .whitespacesAndNewlines),
+			!cleaned.isEmpty
+		else {
+			Log.d("dictation: cleanup failed, keeping raw text")
+			return text
+		}
+		let elapsed = Date().timeIntervalSince(started)
+		Log.d("dictation: cleaned \(text.count) → \(cleaned.count) chars in \(String(format: "%.1f", elapsed))s")
+		let focusMoved = NSWorkspace.shared.frontmostApplication?.localizedName != context?.app
+		if elapsed > Self.maxCleanupSeconds || focusMoved {
+			Log.d("dictation: cleanup arrived late or focus moved, leaving typed text as-is")
+			return cleaned
+		}
+		inserter.update(to: cleaned, isFinal: true)
+		return cleaned
+	}
+
+	private static let maxCleanupSeconds = 6.0
 
 	/// Memos accumulate into one markdown file per day; audio lives in the
 	/// audio/ subfolder.

@@ -100,31 +100,50 @@ function groupSentences(
 	return groups;
 }
 
-async function cleanGroup(
-	group: CleanedGroup,
-	context: string,
-	systemPrompt: string,
-): Promise<CleanedGroup> {
+async function cleanPassage(text: string, context: string, systemPrompt: string): Promise<string> {
 	const response = await openai.chat.completions.create({
 		model: MODELS.mechanical,
 		reasoning_effort: 'none',
 		prompt_cache_key: CACHE_KEY,
 		messages: [
 			{ role: 'system', content: systemPrompt },
-			{ role: 'user', content: makeUserPrompt(context, group.text) },
+			{ role: 'user', content: makeUserPrompt(context, text) },
 		],
 	});
 
 	const cleaned = response.choices[0]?.message.content?.trim();
-	if (!cleaned) return group;
+	if (!cleaned) return text;
 
-	return {
-		...group,
-		text: cleaned
-			.replace(/^"""\n?/, '')
-			.replace(/\n?"""$/, '')
-			.trim(),
-	};
+	return cleaned
+		.replace(/^"""\n?/, '')
+		.replace(/\n?"""$/, '')
+		.trim();
+}
+
+async function loadVocabulary(): Promise<string[]> {
+	const [customSpellings, keyTerms, knownSpeakers] = await Promise.all([
+		getCustomSpellings(),
+		getKeyTerms(),
+		getKnownSpeakers(),
+	]);
+
+	const vocabulary = new Set<string>(knownSpeakers.map((s) => s.name));
+	for (const spelling of customSpellings) {
+		vocabulary.add(spelling.to);
+	}
+	keyTerms.forEach((term) => vocabulary.add(term));
+	return Array.from(vocabulary);
+}
+
+/**
+ * Cleans one dictated utterance destined for a text field: the same edits as
+ * a transcript passage, flattened to a single line so the inserter never
+ * types a newline into a field where Return might submit.
+ */
+export async function cleanUtterance(text: string): Promise<string> {
+	const systemPrompt = makeSystemPrompt(await loadVocabulary());
+	const cleaned = await cleanPassage(text, '', systemPrompt);
+	return cleaned.replace(/\s*\n+\s*/g, ' ');
 }
 
 /**
@@ -145,19 +164,7 @@ export async function cleanTranscript(
 
 	console.log(`  Found ${sentences.length} sentences to clean`);
 
-	const [customSpellings, keyTerms, knownSpeakers] = await Promise.all([
-		getCustomSpellings(),
-		getKeyTerms(),
-		getKnownSpeakers(),
-	]);
-
-	const vocabulary = new Set<string>(knownSpeakers.map((s) => s.name));
-	for (const spelling of customSpellings) {
-		vocabulary.add(spelling.to);
-	}
-	keyTerms.forEach((term) => vocabulary.add(term));
-
-	const systemPrompt = makeSystemPrompt(Array.from(vocabulary));
+	const systemPrompt = makeSystemPrompt(await loadVocabulary());
 	const groups = groupSentences(sentences, SENTENCES_PER_GROUP);
 	console.log(
 		`  Created ${groups.length} groups for cleaning (parallel, concurrency=${CONCURRENCY})`,
@@ -168,7 +175,7 @@ export async function cleanTranscript(
 		async (group, index) => {
 			const previous = groups[index - 1];
 			const context = previous ? previous.text.slice(-CONTEXT_CHARS) : '';
-			return cleanGroup(group, context, systemPrompt);
+			return { ...group, text: await cleanPassage(group.text, context, systemPrompt) };
 		},
 		{
 			concurrency: CONCURRENCY,
