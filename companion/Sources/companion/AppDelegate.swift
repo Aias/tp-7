@@ -151,17 +151,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	/// request carries the moment's context (selection, window, meeting
 	/// transcript so far) and any words spoken on memo within the window.
 	private func beginRequest(_ verb: AgentVerb) {
-		guard pendingRequest == nil, dictation == nil, !ingesting else { return }
+		if let pending = pendingRequest {
+			guard pending.verb != verb, instruction == nil else { return }
+			pendingRequest = (verb, pending.context)
+			Log.d("agent: request switched to \(verb.rawValue)")
+			armRequestTimer()
+			return
+		}
+		guard dictation == nil, !ingesting else { return }
 		Task {
 			let context = await CaptureContext.current()
 			pendingRequest = (verb, context)
 			Log.d("agent: \(verb.rawValue) request pending, hold memo to add words")
-			requestTimer = Timer.scheduledTimer(
-				withTimeInterval: Self.requestSpeakWindow, repeats: false
-			) { [weak self] _ in
-				Task { @MainActor in self?.completeRequest(instruction: nil) }
-			}
+			armRequestTimer()
 			render()
+		}
+	}
+
+	/// Tapping the other side button within the window switches the verb
+	/// and restarts the clock.
+	private func armRequestTimer() {
+		requestTimer?.invalidate()
+		requestTimer = Timer.scheduledTimer(
+			withTimeInterval: Self.requestSpeakWindow, repeats: false
+		) { [weak self] _ in
+			Task { @MainActor in self?.completeRequest(instruction: nil) }
 		}
 	}
 
