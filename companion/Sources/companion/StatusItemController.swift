@@ -94,7 +94,12 @@ final class StatusItemController {
 			image?.isTemplate = true
 			button.image = image
 			button.imagePosition = .imageLeading
-			button.title = elapsed.map { " " + Self.clock($0) } ?? ""
+			button.attributedTitle = NSAttributedString(
+				string: elapsed.map { " " + Self.clock($0) } ?? "",
+				attributes: [
+					.font: NSFont.monospacedDigitSystemFont(
+						ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+				])
 		}
 		let deviceLine: String
 		if let identity {
