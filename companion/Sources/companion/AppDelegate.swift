@@ -14,6 +14,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var dictation: DictationSession?
 	private var meeting: MeetingSession?
 	private var clock: Timer?
+	private var pendingRequest: (verb: AgentVerb, context: CaptureContext)?
+	private var requestTimer: Timer?
+	private var instruction: DictationSession?
+
+	/// After a side-button tap, a memo hold within this window attaches a
+	/// spoken instruction; otherwise the request goes out as-is.
+	private static let requestSpeakWindow = 4.0
+	/// Finalized speech trails a memo release by a moment.
+	private static let noteSettleSeconds = 1.5
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		statusItem = StatusItemController(
@@ -82,14 +91,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 	private func handle(_ button: TP7Button, pressed: Bool) {
 		switch (button, pressed) {
-		case (.memo, true): startDictation()
-		case (.memo, false): stopDictation()
+		case (.memo, true): memoPressed()
+		case (.memo, false): memoReleased()
+		case (.up, true): beginRequest(.act)
+		case (.down, true): beginRequest(.research)
 		case (.rec, true): recPressed()
 		case (.play, true): playPressed()
 		case (.stop, true): stopPressed()
 		case (.plus, true): meeting?.marker("+")
 		case (.minus, true): meeting?.marker("−")
 		default: break
+		}
+	}
+
+	/// Memo is always "my voice": dictation to the cursor when idle, a
+	/// spoken note during a meeting, and the instruction for a pending
+	/// agent request in either case.
+	private func memoPressed() {
+		if pendingRequest != nil {
+			requestTimer?.invalidate()
+			requestTimer = nil
+			if let meeting {
+				meeting.noteBegan()
+			} else {
+				startInstruction()
+			}
+		} else if let meeting {
+			meeting.noteBegan()
+		} else {
+			startDictation()
+		}
+	}
+
+	private func memoReleased() {
+		if pendingRequest != nil {
+			if let meeting {
+				meeting.noteEnded()
+				Task {
+					try? await Task.sleep(for: .seconds(Self.noteSettleSeconds))
+					completeRequest(instruction: meeting.lastNoteText())
+				}
+			} else if let session = instruction {
+				instruction = nil
+				Task {
+					let text = await session.finish()
+					completeRequest(instruction: text.isEmpty ? nil : text)
+				}
+			} else {
+				completeRequest(instruction: nil)
+			}
+		} else if let meeting {
+			meeting.noteEnded()
+		} else {
+			stopDictation()
+		}
+	}
+
+	/// The side buttons ask the agent: one to act, one to research. The
+	/// request carries the moment's context (selection, window, meeting
+	/// transcript so far) and any words spoken on memo within the window.
+	private func beginRequest(_ verb: AgentVerb) {
+		guard pendingRequest == nil, dictation == nil, !ingesting else { return }
+		Task {
+			let context = await CaptureContext.current()
+			pendingRequest = (verb, context)
+			Log.d("agent: \(verb.rawValue) request pending, hold memo to add words")
+			requestTimer = Timer.scheduledTimer(
+				withTimeInterval: Self.requestSpeakWindow, repeats: false
+			) { [weak self] _ in
+				Task { @MainActor in self?.completeRequest(instruction: nil) }
+			}
+			render()
+		}
+	}
+
+	private func completeRequest(instruction: String?) {
+		guard let pending = pendingRequest else { return }
+		pendingRequest = nil
+		requestTimer?.invalidate()
+		requestTimer = nil
+		let snapshot = meeting?.snapshot()
+		render()
+		Task {
+			await AgentRequest.launch(
+				verb: pending.verb, instruction: instruction, context: pending.context,
+				meeting: snapshot)
+		}
+	}
+
+	private func startInstruction() {
+		let session = DictationSession(inserter: nil)
+		instruction = session
+		Task {
+			do {
+				try await session.start()
+			} catch {
+				instruction = nil
+				Log.d("agent: instruction capture failed: \(error)")
+				completeRequest(instruction: nil)
+			}
 		}
 	}
 
@@ -222,6 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	private var state: DeviceState {
+		if pendingRequest != nil { return .agentRequest }
 		if dictation != nil { return .dictating }
 		if ingesting { return .ingesting }
 		if let meeting {

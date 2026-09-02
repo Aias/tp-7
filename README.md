@@ -52,7 +52,7 @@ Logs land in `~/Library/Logs/tp7sync.log`.
 
 ## Companion app
 
-`companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
+`companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. The side buttons hand the moment to Claude Code: a tap writes a brief (current selection and window, or the meeting transcript so far) and opens an interactive session in Ghostty; a memo hold right after the tap adds spoken instructions. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
 
 To install it as a real app:
 

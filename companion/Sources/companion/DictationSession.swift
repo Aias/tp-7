@@ -4,11 +4,12 @@ import Speech
 
 /// One memo-hold dictation: captures the TP-7 mic, streams it through the
 /// on-device SpeechTranscriber, forwards live hypotheses to the inserter,
-/// and archives the audio plus final transcript.
+/// and archives the audio plus final transcript. Without an inserter the
+/// speech is captured for its text alone (an agent instruction).
 @MainActor
 final class DictationSession {
 	private let capture = AudioCapture()
-	private let inserter: TextInserter
+	private let inserter: TextInserter?
 	private var analyzer: SpeechAnalyzer?
 	private var transcriber: SpeechTranscriber?
 	private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
@@ -19,7 +20,7 @@ final class DictationSession {
 	private let audioURL: URL
 	private var context: Task<CaptureContext, Never>?
 
-	init(inserter: TextInserter) {
+	init(inserter: TextInserter?) {
 		self.inserter = inserter
 		let audioDir = Paths.memosDir.appendingPathComponent("audio")
 		try? FileManager.default.createDirectory(
@@ -71,7 +72,7 @@ final class DictationSession {
 		}
 		let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
 		inputContinuation = continuation
-		inserter.beginUtterance()
+		inserter?.beginUtterance()
 		resultsTask = Task { [weak self] in
 			do {
 				for try await result in transcriber.results {
@@ -84,7 +85,7 @@ final class DictationSession {
 						self.finalizedText += text
 						self.volatileText = ""
 						self.previousVolatile = ""
-						self.inserter.update(to: self.finalizedText, isFinal: true)
+						self.inserter?.update(to: self.finalizedText, isFinal: true)
 					} else {
 						self.volatileText = text
 						// Only stream the hypothesis prefix that survived two
@@ -93,7 +94,7 @@ final class DictationSession {
 						let stable = Self.wordBoundaryPrefix(
 							self.previousVolatile.commonPrefix(with: text))
 						self.previousVolatile = text
-						self.inserter.update(
+						self.inserter?.update(
 							to: self.finalizedText + stable, isFinal: false)
 					}
 				}
@@ -126,7 +127,7 @@ final class DictationSession {
 		Log.d("dictation: finished, \(text.count) chars → \(audioURL.lastPathComponent)")
 		let context = await context?.value
 		let cleaned = text.isEmpty ? text : await cleanup(text, context: context)
-		inserter.endUtterance()
+		inserter?.endUtterance()
 		if !cleaned.isEmpty {
 			appendToDailyJournal(cleaned, context: context)
 		}
@@ -155,7 +156,7 @@ final class DictationSession {
 			Log.d("dictation: cleanup arrived late or focus moved, leaving typed text as-is")
 			return cleaned
 		}
-		inserter.update(to: cleaned, isFinal: true)
+		inserter?.update(to: cleaned, isFinal: true)
 		return cleaned
 	}
 

@@ -11,6 +11,7 @@ enum DeviceState {
 	case meetingArmed
 	case meetingRecording
 	case meetingPaused
+	case agentRequest
 
 	var symbolName: String {
 		switch self {
@@ -22,6 +23,7 @@ enum DeviceState {
 		case .meetingArmed: "smallcircle.filled.circle"
 		case .meetingRecording: "record.circle.fill"
 		case .meetingPaused: "pause.circle"
+		case .agentRequest: "sparkles"
 		}
 	}
 
@@ -35,6 +37,7 @@ enum DeviceState {
 		case .meetingArmed: "meeting armed — play to start"
 		case .meetingRecording: "recording meeting…"
 		case .meetingPaused: "meeting paused"
+		case .agentRequest: "agent request — hold memo to add words"
 		}
 	}
 }
