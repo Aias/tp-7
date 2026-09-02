@@ -113,9 +113,15 @@ The dock/undock mode flip is currently a one-toggle on-device step; the menu bar
 
 Memo hold (CC 27 press) starts capture from the TP-7 mic over USB; release ends it. Text streams to the cursor as live hypotheses — words appear immediately and may self-correct — via the pasteboard insertion path. Every dictation is also archived: audio to a memos area of `~/Music/recordings`, with the batch pipeline producing the durable transcript, so the archive copy's quality never depends on the live engine. No Mac-only dictation fallback (global hotkey / Mac mic without the TP-7): the TP-7 is the dictation device; this also keeps the Input Monitoring permission out of the app.
 
+## Gesture grammar
+
+Two axes, the same in every mode. **Memo is always your voice**: dictation to the cursor when idle, a spoken note pinned to the rolling transcript during a meeting. **The side buttons always ask the agent**: one taps out an "act" request, the other "research". A tap fires the request as-is; a memo hold within a few seconds of the tap attaches spoken words to it instead of going to the cursor. The verb comes from the side button, the words from memo, and the context from whatever is happening.
+
+A request writes a brief beside the recordings (`~/Music/recordings/agent/`) and opens an interactive Claude Code session in Ghostty with a prompt pointing at it, so the conversation stays visible and steerable. Idle, the brief carries the context stamp and the text selected in the frontmost app, which is what makes "select a passage, tap, speak" a selection-anchored annotation. In a meeting it carries the on-device transcript so far, both tracks interleaved as *me* and *them*, plus the markers and notes, so an agent can start on something five minutes into an hour-long call. The target project is never known at request time and no workspace is created automatically: the brief lists candidate repos and the session confirms with you before touching one.
+
 ## Meetings
 
-The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: **Rec arms, Play starts, Stop ends, Play toggles pause** while capturing. Capture is the TP-7 mic when wired, falling back to the Mac's default input when the device is connected over BLE only; when meeting audio is playing on the Mac (Zoom/Meet), system audio is captured via ScreenCaptureKit as a **separate track** — mixed only at transcription time, so speaker bleed into the room mic can't echo or double voices. The official output is the post-meeting artifact: full recording plus the AssemblyAI/OpenAI pipeline transcript, kicked off at Stop and ready minutes later. A live rolling transcript view is a later addition — the streaming pipeline exists for dictation, so the design keeps the door open, but no meeting UI depends on it.
+The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: **Rec arms, Play starts, Stop ends, Play toggles pause** while capturing. Capture is the TP-7 mic when wired, falling back to the Mac's default input when the device is connected over BLE only; when meeting audio is playing on the Mac (Zoom/Meet), system audio is captured via ScreenCaptureKit as a **separate track** — mixed only at transcription time, so speaker bleed into the room mic can't echo or double voices. The official output is the post-meeting artifact: full recording plus the AssemblyAI/OpenAI pipeline transcript, kicked off at Stop and ready minutes later. Both tracks also run through the on-device transcriber during the meeting; that rolling transcript is for agent requests and a crash-safe first draft, not a live view — the user can hear the meeting, the agent can't.
 
 ## Phase 0 — remaining bench unknowns (blocking design details, not the direction)
 
@@ -130,8 +136,8 @@ The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: 
 2. **Gestures** — CoreMIDI listener for ctrl-mode CCs; recording indicator inferred from Rec/Memo presses; gesture log in the archive DB.
 3. **Dictation** — memo-hold → AVAudioEngine capture → SpeechTranscriber live → insert at cursor; memo audio + transcript archived to `recordings/memos/` and the DB.
 4. **Meetings** — live rolling transcript from the USB feed during meetings; batch diarization/summary pass afterwards through the existing pipeline; both linked in the DB.
-5. **Search** — GRDB/FTS5 archive over everything ever captured; SwiftUI search window (bm25 + snippets, click-to-seek into audio); TUI equivalent optional.
-6. **Control profiles** — wheel/rocker/button mappings to app actions (scrolling, agent sessions, media). Plugin-shaped.
+5. **Control profiles** — wheel/rocker/button mappings to app actions (scrolling, agent sessions, media). Plugin-shaped.
+6. **Search** — GRDB/FTS5 archive over everything ever captured; SwiftUI search window (bm25 + snippets, click-to-seek into audio). Deferred behind everything real-time: the value of this project is in capture and the minutes after Stop, and retrieval can wait until the archive has enough in it to need it.
 
 ## Settled decisions
 
@@ -141,4 +147,5 @@ The Mac mirrors the TP-7's own transport grammar, driven by ctrl-mode gestures: 
 - The AssemblyAI/OpenAI pipeline stays as the official transcript path — state of the art over on-device. Local engines (SpeechTranscriber, FluidAudio) serve the live/latency layer only.
 - Device retention: recordings are auto-deleted from the TP-7 once pulled, size-verified, transcribed, and archived — the archive is the single source of truth and the device stays empty. (tp7sync does not delete yet; this is destination behavior.)
 - Search archive is standalone (SQLite/FTS5, owned by this app); red-cliff-record integration is a later export once the shape settles.
-- Priorities: dictation and meetings are the destination; the shell and gesture layers exist to support them.
+- Priorities: dictation and meetings are the destination; the shell and gesture layers exist to support them. Real-time and immediately-post-capture improvements outrank archive and search work.
+- Every capture is stamped with its context (frontmost app, focused window, document and git branch when the window exposes them) so the archive can answer "what was I doing when I said this" without any calendar or agent integration.

@@ -13,6 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private let inserter = TextInserter()
 	private var dictation: DictationSession?
 	private var meeting: MeetingSession?
+	private var clock: Timer?
+	private var pendingRequest: (verb: AgentVerb, context: CaptureContext)?
+	private var requestTimer: Timer?
+	private var instruction: DictationSession?
+	/// Meetings being mixed and transcribed after Stop (or recovered at launch).
+	private var processing = 0
+
+	/// After a side-button tap, a memo hold within this window attaches a
+	/// spoken instruction; otherwise the request goes out as-is.
+	private static let requestSpeakWindow = 4.0
+	/// Finalized speech trails a memo release by a moment.
+	private static let noteSettleSeconds = 1.5
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		statusItem = StatusItemController(
@@ -23,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 		self.midi = midi
 		midi.start()
+		Notifier.prepare()
 		if !TextInserter.accessibilityGranted {
 			TextInserter.requestAccessibility()
 		}
@@ -35,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				Log.d("model preparation failed: \(error)")
 			}
 		}
-		Task { await MeetingSession.recoverOrphans() }
+		process { await MeetingSession.recoverOrphans() }
 	}
 
 	private func handle(_ event: MIDIEvent) {
@@ -51,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 					Notifier.post(
 						title: "TP-7 unplugged",
 						message: "Meeting capture ended.")
-					Task { await meeting.finish() }
+					process { await meeting.finish() }
 				}
 			}
 			if !present && devicePresent && gesturesSeen && !ingesting {
@@ -80,14 +93,138 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 	private func handle(_ button: TP7Button, pressed: Bool) {
 		switch (button, pressed) {
-		case (.memo, true): startDictation()
-		case (.memo, false): stopDictation()
+		case (.memo, true): memoPressed()
+		case (.memo, false): memoReleased()
+		case (.up, true): beginRequest(.act)
+		case (.down, true): beginRequest(.research)
 		case (.rec, true): recPressed()
 		case (.play, true): playPressed()
 		case (.stop, true): stopPressed()
 		case (.plus, true): meeting?.marker("+")
 		case (.minus, true): meeting?.marker("−")
 		default: break
+		}
+	}
+
+	/// Memo is always "my voice": dictation to the cursor when idle, a
+	/// spoken note during a meeting, and the instruction for a pending
+	/// agent request in either case.
+	private func memoPressed() {
+		if pendingRequest != nil {
+			requestTimer?.invalidate()
+			requestTimer = nil
+			if let meeting {
+				meeting.noteBegan()
+			} else {
+				startInstruction()
+			}
+		} else if let meeting {
+			meeting.noteBegan()
+		} else {
+			startDictation()
+		}
+	}
+
+	private func memoReleased() {
+		if pendingRequest != nil {
+			if let meeting {
+				meeting.noteEnded()
+				Task {
+					try? await Task.sleep(for: .seconds(Self.noteSettleSeconds))
+					completeRequest(instruction: meeting.lastNoteText())
+				}
+			} else if let session = instruction {
+				instruction = nil
+				Task {
+					let text = await session.finish()
+					completeRequest(instruction: text.isEmpty ? nil : text)
+				}
+			} else {
+				completeRequest(instruction: nil)
+			}
+		} else if let meeting {
+			meeting.noteEnded()
+		} else {
+			stopDictation()
+		}
+	}
+
+	/// The side buttons ask the agent: one to act, one to research. The
+	/// request carries the moment's context (selection, window, meeting
+	/// transcript so far) and any words spoken on memo within the window.
+	private func beginRequest(_ verb: AgentVerb) {
+		if let pending = pendingRequest {
+			guard instruction == nil else { return }
+			if pending.verb == verb {
+				pendingRequest = nil
+				requestTimer?.invalidate()
+				requestTimer = nil
+				Log.d("agent: request cancelled")
+				render()
+			} else {
+				pendingRequest = (verb, pending.context)
+				Log.d("agent: request switched to \(verb.rawValue)")
+				armRequestTimer()
+				render()
+			}
+			return
+		}
+		guard dictation == nil, !ingesting else { return }
+		Task {
+			let context = await CaptureContext.current(forRequest: true)
+			pendingRequest = (verb, context)
+			Log.d("agent: \(verb.rawValue) request pending, hold memo to add words")
+			armRequestTimer()
+			render()
+		}
+	}
+
+	/// Within the window, the other side button switches the verb and
+	/// restarts the clock; the same button again cancels the request.
+	private func armRequestTimer() {
+		requestTimer?.invalidate()
+		requestTimer = Timer.scheduledTimer(
+			withTimeInterval: Self.requestSpeakWindow, repeats: false
+		) { [weak self] _ in
+			Task { @MainActor in self?.completeRequest(instruction: nil) }
+		}
+	}
+
+	private func completeRequest(instruction: String?) {
+		guard let pending = pendingRequest else { return }
+		pendingRequest = nil
+		requestTimer?.invalidate()
+		requestTimer = nil
+		let snapshot = meeting?.snapshot()
+		render()
+		Task {
+			await AgentRequest.launch(
+				verb: pending.verb, instruction: instruction, context: pending.context,
+				meeting: snapshot)
+		}
+	}
+
+	private func process(_ work: @escaping @MainActor () async -> Void) {
+		processing += 1
+		render()
+		Task {
+			await work()
+			processing -= 1
+			render()
+		}
+	}
+
+	private func startInstruction() {
+		let session = DictationSession(inserter: nil)
+		instruction = session
+		Task {
+			do {
+				try await session.start()
+			} catch {
+				instruction = nil
+				Log.d("agent: instruction capture failed: \(error)")
+				completeRequest(instruction: nil)
+			}
 		}
 	}
 
@@ -130,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		if meeting.phase == .armed {
 			meeting.cancel()
 		} else {
-			Task { await meeting.finish() }
+			process { await meeting.finish() }
 		}
 	}
 
@@ -211,7 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private func describe(_ gesture: Gesture) -> String {
 		switch gesture {
 		case .button(let button, let pressed):
-			"\(button.label) \(pressed ? "down" : "up")"
+			"\(button.label) \(pressed ? "pressed" : "released")"
 		case .wheel(let delta):
 			"wheel \(delta > 0 ? "+" : "")\(delta)"
 		case .rocker(let value):
@@ -220,8 +357,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	private var state: DeviceState {
+		if let pending = pendingRequest { return .agentRequest(pending.verb) }
 		if dictation != nil { return .dictating }
 		if ingesting { return .ingesting }
+		if processing > 0 { return .processing }
 		if let meeting {
 			switch meeting.phase {
 			case .armed: return .meetingArmed
@@ -233,7 +372,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		return gesturesSeen ? .control : .recorder
 	}
 
+	/// Elapsed capture time shows beside the icon while a meeting is
+	/// recording or paused; a one-second timer keeps it ticking.
 	private func render() {
-		statusItem?.update(state: state, identity: identity, lastGesture: lastGesture)
+		let elapsed = meeting.flatMap { $0.phase == .armed ? nil : $0.elapsed }
+		statusItem?.update(
+			state: state, identity: identity, lastGesture: lastGesture, elapsed: elapsed)
+		let ticking = meeting?.phase == .recording
+		if ticking && clock == nil {
+			clock = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+				Task { @MainActor in self?.render() }
+			}
+		} else if !ticking, let clock {
+			clock.invalidate()
+			self.clock = nil
+		}
 	}
 }

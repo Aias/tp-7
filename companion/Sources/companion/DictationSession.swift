@@ -1,14 +1,15 @@
 import AVFoundation
-import Foundation
+import AppKit
 import Speech
 
 /// One memo-hold dictation: captures the TP-7 mic, streams it through the
 /// on-device SpeechTranscriber, forwards live hypotheses to the inserter,
-/// and archives the audio plus final transcript.
+/// and archives the audio plus final transcript. Without an inserter the
+/// speech is captured for its text alone (an agent instruction).
 @MainActor
 final class DictationSession {
 	private let capture = AudioCapture()
-	private let inserter: TextInserter
+	private let inserter: TextInserter?
 	private var analyzer: SpeechAnalyzer?
 	private var transcriber: SpeechTranscriber?
 	private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
@@ -17,8 +18,9 @@ final class DictationSession {
 	private var volatileText = ""
 	private var previousVolatile = ""
 	private let audioURL: URL
+	private var context: Task<CaptureContext, Never>?
 
-	init(inserter: TextInserter) {
+	init(inserter: TextInserter?) {
 		self.inserter = inserter
 		let audioDir = Paths.memosDir.appendingPathComponent("audio")
 		try? FileManager.default.createDirectory(
@@ -55,6 +57,7 @@ final class DictationSession {
 		guard let device = AudioCapture.findTP7Device() else {
 			throw DictationError.deviceNotFound
 		}
+		context = Task { await CaptureContext.current() }
 		let transcriber = SpeechTranscriber(
 			locale: Locale.current, transcriptionOptions: [],
 			reportingOptions: [.volatileResults], attributeOptions: [])
@@ -69,7 +72,7 @@ final class DictationSession {
 		}
 		let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
 		inputContinuation = continuation
-		inserter.beginUtterance()
+		inserter?.beginUtterance()
 		resultsTask = Task { [weak self] in
 			do {
 				for try await result in transcriber.results {
@@ -82,7 +85,7 @@ final class DictationSession {
 						self.finalizedText += text
 						self.volatileText = ""
 						self.previousVolatile = ""
-						self.inserter.update(to: self.finalizedText, isFinal: true)
+						self.inserter?.update(to: self.finalizedText, isFinal: true)
 					} else {
 						self.volatileText = text
 						// Only stream the hypothesis prefix that survived two
@@ -91,7 +94,7 @@ final class DictationSession {
 						let stable = Self.wordBoundaryPrefix(
 							self.previousVolatile.commonPrefix(with: text))
 						self.previousVolatile = text
-						self.inserter.update(
+						self.inserter?.update(
 							to: self.finalizedText + stable, isFinal: false)
 					}
 				}
@@ -122,20 +125,51 @@ final class DictationSession {
 		let text = (finalizedText + volatileText)
 			.trimmingCharacters(in: .whitespacesAndNewlines)
 		Log.d("dictation: finished, \(text.count) chars → \(audioURL.lastPathComponent)")
-		inserter.endUtterance()
-		if !text.isEmpty {
-			appendToDailyJournal(text)
+		let context = await context?.value
+		let cleaned = text.isEmpty ? text : await cleanup(text, context: context)
+		inserter?.endUtterance()
+		if !cleaned.isEmpty {
+			appendToDailyJournal(cleaned, context: context)
 		}
-		return text
+		return cleaned
 	}
+
+	/// Replaces the typed utterance with a cleaned version (fillers,
+	/// stutters, punctuation) from the pipeline's editing prompt. The
+	/// rewrite is skipped when focus has moved on or the call took too
+	/// long, since the inserter can only retype what it just typed.
+	private func cleanup(_ text: String, context: CaptureContext?) async -> String {
+		let started = Date()
+		guard
+			let cleaned = await Subprocess.run(
+				["bun", "src/cli.ts", "clean", text], currentDirectory: Paths.repoRoot)?
+				.trimmingCharacters(in: .whitespacesAndNewlines),
+			!cleaned.isEmpty
+		else {
+			Log.d("dictation: cleanup failed, keeping raw text")
+			return text
+		}
+		let elapsed = Date().timeIntervalSince(started)
+		Log.d("dictation: cleaned \(text.count) → \(cleaned.count) chars in \(String(format: "%.1f", elapsed))s")
+		let focusMoved = NSWorkspace.shared.frontmostApplication?.localizedName != context?.app
+		if elapsed > Self.maxCleanupSeconds || focusMoved {
+			Log.d("dictation: cleanup arrived late or focus moved, leaving typed text as-is")
+			return cleaned
+		}
+		inserter?.update(to: cleaned, isFinal: true)
+		return cleaned
+	}
+
+	private static let maxCleanupSeconds = 6.0
 
 	/// Memos accumulate into one markdown file per day; audio lives in the
 	/// audio/ subfolder.
-	private func appendToDailyJournal(_ text: String) {
+	private func appendToDailyJournal(_ text: String, context: CaptureContext?) {
 		let day = Self.dayStamp()
 		let journalURL = Paths.memosDir.appendingPathComponent("\(day).md")
 		let time = Self.timeStamp()
-		let entry = "## \(time)\n\n\(text)\n\n"
+		let heading = context?.summary.map { "## \(time) · \($0)" } ?? "## \(time)"
+		let entry = "\(heading)\n\n\(text)\n\n"
 		do {
 			if let handle = try? FileHandle(forWritingTo: journalURL) {
 				handle.seekToEndOfFile()

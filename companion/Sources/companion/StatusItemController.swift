@@ -1,27 +1,31 @@
 import AppKit
 
-enum DeviceState {
+enum DeviceState: Equatable {
 	case absent
 	/// Device present, no gestures seen — MIDI is off or not in ctrl mode.
 	case recorder
 	/// Device present and gesture events are flowing (MIDI=ctrl).
 	case control
 	case ingesting
+	case processing
 	case dictating
 	case meetingArmed
 	case meetingRecording
 	case meetingPaused
+	case agentRequest(AgentVerb)
 
 	var symbolName: String {
 		switch self {
 		case .absent: "circle.dotted"
 		case .recorder: "circle"
-		case .control: "record.circle"
+		case .control: "circle"
 		case .ingesting: "arrow.down.circle"
+		case .processing: "ellipsis.circle"
 		case .dictating: "waveform.circle"
 		case .meetingArmed: "smallcircle.filled.circle"
 		case .meetingRecording: "record.circle.fill"
 		case .meetingPaused: "pause.circle"
+		case .agentRequest: "sparkles"
 		}
 	}
 
@@ -31,10 +35,13 @@ enum DeviceState {
 		case .recorder: "recorder mode"
 		case .control: "control mode"
 		case .ingesting: "ingesting…"
+		case .processing: "transcribing meeting…"
 		case .dictating: "dictating…"
 		case .meetingArmed: "meeting armed — play to start"
 		case .meetingRecording: "recording meeting…"
 		case .meetingPaused: "meeting paused"
+		case .agentRequest(let verb):
+			"\(verb.rawValue) request — hold memo to speak, same button to cancel"
 		}
 	}
 }
@@ -54,7 +61,7 @@ final class StatusItemController {
 	init(onIngestNow: @escaping () -> Void, onBrowseDevice: @escaping () -> Void) {
 		self.onIngestNow = onIngestNow
 		self.onBrowseDevice = onBrowseDevice
-		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 		ingestItem = NSMenuItem(title: "Ingest Now", action: nil, keyEquivalent: "i")
 		browseItem = NSMenuItem(title: "List Device Files", action: nil, keyEquivalent: "")
 		let menu = NSMenu()
@@ -84,12 +91,22 @@ final class StatusItemController {
 		statusItem.menu = menu
 	}
 
-	func update(state: DeviceState, identity: DeviceInfo?, lastGesture: String?) {
+	func update(
+		state: DeviceState, identity: DeviceInfo?, lastGesture: String?,
+		elapsed: TimeInterval?
+	) {
 		if let button = statusItem.button {
 			let image = NSImage(
 				systemSymbolName: state.symbolName, accessibilityDescription: "TP-7")
 			image?.isTemplate = true
 			button.image = image
+			button.imagePosition = .imageLeading
+			button.attributedTitle = NSAttributedString(
+				string: elapsed.map { " " + Self.clock($0) } ?? "",
+				attributes: [
+					.font: NSFont.monospacedDigitSystemFont(
+						ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
+				])
 		}
 		let deviceLine: String
 		if let identity {
@@ -104,9 +121,16 @@ final class StatusItemController {
 		if let lastGesture {
 			gestureItem.title = "last gesture: \(lastGesture)"
 		}
-		let deviceAvailable = state == .recorder || state == .control
+		let deviceAvailable = state == .recorder || state == .control || state == .processing
 		ingestItem.isEnabled = deviceAvailable
 		browseItem.isEnabled = deviceAvailable
+	}
+
+	private static func clock(_ seconds: TimeInterval) -> String {
+		let total = Int(seconds)
+		return total >= 3600
+			? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+			: String(format: "%d:%02d", total / 60, total % 60)
 	}
 
 	@objc private func ingestNow() {

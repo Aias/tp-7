@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { ingest } from './ingest.js';
 import { loadManifest } from './manifest.js';
 import { listDevices } from './tp7.js';
+import { cleanUtterance } from './transcriber/cleaning.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
 import { parseAndValidateFile, parseSpeakersArg, validateEnvironment } from './transcriber/utils.js';
 import { watch } from './watch.js';
@@ -14,6 +15,7 @@ Usage:
   bun src/cli.ts watch                        Watch for the device and ingest on attach
   bun src/cli.ts status                       Show device presence and ingest state
   bun src/cli.ts transcribe <file> [speakers] Transcribe one local audio file (speakers: 3 or 2-5)
+  bun src/cli.ts clean <text>                 Clean one dictated utterance (fillers, punctuation)
 `;
 
 const config = loadConfig();
@@ -58,6 +60,16 @@ switch (command) {
 		const inputPath = parseAndValidateFile(process.argv[3], '⛔ Please provide an audio file path');
 		const speakers = parseSpeakersArg(process.argv[4]);
 		await runFullPipeline({ inputPath, speakers });
+		break;
+	}
+	case 'clean': {
+		validateEnvironment();
+		const text = process.argv[3]?.trim();
+		if (!text) {
+			console.error('⛔ Please provide the text to clean');
+			process.exit(1);
+		}
+		process.stdout.write(await cleanUtterance(text));
 		break;
 	}
 	default: {
