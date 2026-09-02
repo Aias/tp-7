@@ -169,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 		guard dictation == nil, !ingesting else { return }
 		Task {
-			let context = await CaptureContext.current()
+			let context = await CaptureContext.current(forRequest: true)
 			pendingRequest = (verb, context)
 			Log.d("agent: \(verb.rawValue) request pending, hold memo to add words")
 			armRequestTimer()

@@ -71,6 +71,9 @@ enum AgentRequest {
 		if let selection = context.selection {
 			sections.append("## Selected text\n\n```\n\(selection)\n```")
 		}
+		if let clipboard = context.clipboard, clipboard != context.selection {
+			sections.append("## Clipboard\n\n```\n\(clipboard)\n```")
+		}
 		if let meeting {
 			let transcript = meeting.transcript.isEmpty ? "(nothing transcribed yet)" : meeting.transcript
 			sections.append(

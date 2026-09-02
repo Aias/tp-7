@@ -2,30 +2,34 @@ import AppKit
 import ApplicationServices
 
 /// What the user was doing when a capture started: the frontmost app, its
-/// focused window, the text selected in it, and — when the window exposes
-/// its document — the file and git branch behind it. Stamped onto every
-/// memo and meeting so the archive can answer "what was I working on when
-/// I said this"; the selection anchors agent requests to a passage.
+/// focused window, and — when the window exposes its document — the file
+/// and git branch behind it. Stamped onto every memo and meeting so the
+/// archive can answer "what was I working on when I said this". Agent
+/// requests also take the selected text and the clipboard, which anchor
+/// the request to a passage.
 struct CaptureContext {
 	let app: String?
 	let window: String?
 	let selection: String?
+	let clipboard: String?
 	let document: URL?
 	let branch: String?
 
-	private static let maxSelectionLength = 4000
+	private static let maxTextLength = 4000
 
+	/// `forRequest` also reads the selected text (where the app exposes it
+	/// through accessibility; web views mostly don't) and the clipboard.
 	@MainActor
-	static func current() async -> CaptureContext {
+	static func current(forRequest: Bool = false) async -> CaptureContext {
 		guard let frontmost = NSWorkspace.shared.frontmostApplication else {
-			return CaptureContext(app: nil, window: nil, selection: nil, document: nil, branch: nil)
+			return CaptureContext(
+				app: nil, window: nil, selection: nil, clipboard: nil, document: nil, branch: nil)
 		}
 		let element = AXUIElementCreateApplication(frontmost.processIdentifier)
+		enableWebAccessibility(element)
 		let window = focusedWindow(of: element)
-		let selection = focusedElement(of: element)
-			.flatMap { attribute($0, kAXSelectedTextAttribute) as? String }
-			.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-			.flatMap { $0.isEmpty ? nil : String($0.prefix(maxSelectionLength)) }
+		let selection = forRequest ? trimmed(axSelection(in: element)) : nil
+		let clipboard = forRequest ? trimmed(NSPasteboard.general.string(forType: .string)) : nil
 		let document = window.flatMap { attribute($0, kAXDocumentAttribute) as? String }
 			.flatMap(URL.init(string:))
 			.flatMap { $0.isFileURL ? $0 : nil }
@@ -40,6 +44,7 @@ struct CaptureContext {
 			app: frontmost.localizedName,
 			window: window.flatMap { attribute($0, kAXTitleAttribute) as? String },
 			selection: selection,
+			clipboard: clipboard,
 			document: document,
 			branch: branch.flatMap { $0.isEmpty ? nil : $0 })
 	}
@@ -58,6 +63,33 @@ struct CaptureContext {
 		guard let app else { return nil }
 		if let window, !window.isEmpty { return "\(app) — \(window)" }
 		return app
+	}
+
+	/// Chromium and Electron only build their accessibility tree once an
+	/// assistive client announces itself.
+	private static func enableWebAccessibility(_ app: AXUIElement) {
+		AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+		AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+	}
+
+	/// The selection from the focused element or the nearest ancestor that
+	/// exposes one.
+	private static func axSelection(in app: AXUIElement) -> String? {
+		var element = focusedElement(of: app)
+		var depth = 0
+		while let current = element, depth < 8 {
+			if let text = attribute(current, kAXSelectedTextAttribute) as? String, !text.isEmpty {
+				return text
+			}
+			element = self.element(attribute(current, kAXParentAttribute))
+			depth += 1
+		}
+		return nil
+	}
+
+	private static func trimmed(_ text: String?) -> String? {
+		text.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+			.flatMap { $0.isEmpty ? nil : String($0.prefix(maxTextLength)) }
 	}
 
 	private static func focusedWindow(of app: AXUIElement) -> AXUIElement? {
