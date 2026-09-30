@@ -5,20 +5,34 @@ enum Subprocess {
 		"\(NSHomeDirectory())/.bun/bin:"
 		+ "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+	private static func makeProcess(_ arguments: [String], currentDirectory: URL?) -> Process {
+		let process = Process()
+		process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+		process.arguments = arguments
+		process.environment = ProcessInfo.processInfo.environment
+			.merging(["PATH": path]) { _, new in new }
+		if let currentDirectory {
+			process.currentDirectoryURL = currentDirectory
+		}
+		return process
+	}
+
+	private static func openLog() -> FileHandle? {
+		if !FileManager.default.fileExists(atPath: Paths.logFile.path) {
+			FileManager.default.createFile(atPath: Paths.logFile.path, contents: nil)
+		}
+		let log = try? FileHandle(forWritingTo: Paths.logFile)
+		log?.seekToEndOfFile()
+		return log
+	}
+
 	/// Runs a command, returning stdout on success and nil on failure.
 	static func run(
 		_ arguments: [String],
 		currentDirectory: URL? = nil
 	) async -> String? {
 		await withCheckedContinuation { continuation in
-			let process = Process()
-			process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-			process.arguments = arguments
-			process.environment = ProcessInfo.processInfo.environment
-				.merging(["PATH": path]) { _, new in new }
-			if let currentDirectory {
-				process.currentDirectoryURL = currentDirectory
-			}
+			let process = makeProcess(arguments, currentDirectory: currentDirectory)
 			let stdout = Pipe()
 			// Never inherit the terminal's stdin: a tool that reads it
 			// (ffmpeg) gets suspended by job control and hangs the caller.
@@ -45,22 +59,9 @@ enum Subprocess {
 		_ arguments: [String],
 		currentDirectory: URL? = nil
 	) async -> Bool {
-		if !FileManager.default.fileExists(atPath: Paths.logFile.path) {
-			FileManager.default.createFile(atPath: Paths.logFile.path, contents: nil)
-		}
-		guard let log = try? FileHandle(forWritingTo: Paths.logFile) else {
-			return false
-		}
-		log.seekToEndOfFile()
+		guard let log = openLog() else { return false }
 		return await withCheckedContinuation { continuation in
-			let process = Process()
-			process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-			process.arguments = arguments
-			process.environment = ProcessInfo.processInfo.environment
-				.merging(["PATH": path]) { _, new in new }
-			if let currentDirectory {
-				process.currentDirectoryURL = currentDirectory
-			}
+			let process = makeProcess(arguments, currentDirectory: currentDirectory)
 			process.standardInput = FileHandle.nullDevice
 			process.standardOutput = log
 			process.standardError = log
@@ -75,5 +76,21 @@ enum Subprocess {
 				continuation.resume(returning: false)
 			}
 		}
+	}
+
+	/// Starts a long-running command fed through `stdin` and read through
+	/// `stdout`; its stderr goes to the companion log file.
+	static func spawn(
+		_ arguments: [String],
+		currentDirectory: URL? = nil,
+		stdin: Pipe,
+		stdout: Pipe
+	) throws -> Process {
+		let process = makeProcess(arguments, currentDirectory: currentDirectory)
+		process.standardInput = stdin
+		process.standardOutput = stdout
+		process.standardError = openLog() ?? FileHandle.nullDevice
+		try process.run()
+		return process
 	}
 }

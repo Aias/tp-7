@@ -61,3 +61,18 @@ export async function getTranscriptionOptions() {
 	const config = await loadConfig();
 	return config.transcriptionOptions;
 }
+
+export async function getVocabulary(): Promise<string[]> {
+	const [customSpellings, keyTerms, knownSpeakers] = await Promise.all([
+		getCustomSpellings(),
+		getKeyTerms(),
+		getKnownSpeakers(),
+	]);
+	return [
+		...new Set([
+			...knownSpeakers.map((speaker) => speaker.name),
+			...customSpellings.map((spelling) => spelling.to),
+			...keyTerms,
+		]),
+	];
+}

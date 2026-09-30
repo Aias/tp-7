@@ -1,10 +1,6 @@
 import { formatTimestamp } from './utils.js';
 import { type TranscriptionResult } from './transcription.js';
-import {
-	getCustomSpellings,
-	getKeyTerms,
-	getKnownSpeakers,
-} from './transcription.config.loader.js';
+import { getVocabulary } from './transcription.config.loader.js';
 import { formatSpeakerName, type SpeakerMap } from './speaker-identification.js';
 import { processWithPool } from './concurrency.js';
 import { MODELS, openai } from './openai.js';
@@ -113,28 +109,13 @@ async function cleanPassage(text: string, context: string, systemPrompt: string)
 		.trim();
 }
 
-async function loadVocabulary(): Promise<string[]> {
-	const [customSpellings, keyTerms, knownSpeakers] = await Promise.all([
-		getCustomSpellings(),
-		getKeyTerms(),
-		getKnownSpeakers(),
-	]);
-
-	const vocabulary = new Set<string>(knownSpeakers.map((s) => s.name));
-	for (const spelling of customSpellings) {
-		vocabulary.add(spelling.to);
-	}
-	keyTerms.forEach((term) => vocabulary.add(term));
-	return Array.from(vocabulary);
-}
-
 /**
  * Cleans one dictated utterance destined for a text field: the same edits as
  * a transcript passage, flattened to a single line so the inserter never
  * types a newline into a field where Return might submit.
  */
 export async function cleanUtterance(text: string): Promise<string> {
-	const systemPrompt = makeSystemPrompt(await loadVocabulary());
+	const systemPrompt = makeSystemPrompt(await getVocabulary());
 	const cleaned = await cleanPassage(text, '', systemPrompt);
 	return cleaned.replace(/\s*\n+\s*/g, ' ');
 }
@@ -157,7 +138,7 @@ export async function cleanTranscript(
 
 	console.log(`  Found ${sentences.length} sentences to clean`);
 
-	const systemPrompt = makeSystemPrompt(await loadVocabulary());
+	const systemPrompt = makeSystemPrompt(await getVocabulary());
 	const groups = groupSentences(sentences, SENTENCES_PER_GROUP);
 	console.log(
 		`  Created ${groups.length} groups for cleaning (parallel, concurrency=${CONCURRENCY})`,
