@@ -6,8 +6,7 @@
 		"now": "bun src/cli.ts now",
 		"status": "bun src/cli.ts status",
 		"transcribe": "bun src/cli.ts transcribe",
-		"typecheck": "tsgo --noEmit",
-		"watch": "bun src/cli.ts watch"
+		"typecheck": "tsgo --noEmit"
 	},
 	"dependencies": {
 		"assemblyai": "~4.41.5",

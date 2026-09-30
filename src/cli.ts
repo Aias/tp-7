@@ -7,7 +7,6 @@ import { cleanUtterance } from './transcriber/cleaning.js';
 import { streamLive } from './transcriber/live.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
 import { parseAndValidateFile, parseSpeakersArg, validateEnvironment } from './transcriber/utils.js';
-import { watch } from './watch.js';
 
 const USAGE = `tp7sync — pull recordings off a teenage engineering TP-7 and transcribe them
 
@@ -15,7 +14,6 @@ Usage:
   bun src/cli.ts now                          Ingest new recordings once (pull, then transcribe)
   bun src/cli.ts pull                         Pull new recordings off the device
   bun src/cli.ts transcribe-pulled            Transcribe pulled recordings
-  bun src/cli.ts watch                        Watch for the device and ingest on attach
   bun src/cli.ts status                       Show device presence and ingest state
   bun src/cli.ts transcribe <file> [speakers] Transcribe one local audio file (speakers: 3 or 2-5)
   bun src/cli.ts clean <text>                 Clean one dictated utterance (fillers, punctuation)
@@ -48,11 +46,6 @@ switch (command) {
 			`Done: ${result.transcribed.length} transcribed, ${result.failed.length} failed.`,
 		);
 		process.exitCode = result.failed.length > 0 ? 1 : 0;
-		break;
-	}
-	case 'watch': {
-		validateEnvironment();
-		await watch(config);
 		break;
 	}
 	case 'status': {

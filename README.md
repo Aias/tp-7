@@ -37,18 +37,9 @@ Optional settings overrides go in `~/.config/tp7sync/config.json`; see `src/conf
 
 ```sh
 bun run now         # ingest new recordings once
-bun run watch       # watch for the device, ingest on attach
 bun run status      # device presence + manifest summary
 bun run transcribe <file> [speakers]   # transcribe any local audio file (speakers: 3 or 2-5)
 ```
-
-To run the watcher at login:
-
-```sh
-./scripts/install-launchd.sh
-```
-
-Logs land in `~/Library/Logs/tp7sync.log`.
 
 ## Companion app
 

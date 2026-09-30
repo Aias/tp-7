@@ -95,7 +95,7 @@ The wheel/rocker/side buttons stay free for a pluggable "control profiles" layer
 ## What already works (validated this session)
 
 - Patched tp7 CLI: audio→MTP switch, ls, pull at ~22 MB/s, return to audio mode — scripted, no device buttons.
-- Full ingest → AssemblyAI/OpenAI pipeline → dated folder grouping in `~/Music/recordings` (`bun run now|watch|status|transcribe`, launchd installer).
+- Full ingest → AssemblyAI/OpenAI pipeline → dated folder grouping in `~/Music/recordings` (`bun run now|status|transcribe`).
 - Greet SysEx round-trip from the shell; identity parse; `mode:` polling (negative result: not a recording detector).
 - ffmpeg capture from the TP-7 as a CoreAudio input device.
 

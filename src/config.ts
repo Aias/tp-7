@@ -10,10 +10,6 @@ const ConfigSchema = z.object({
 	tp7Bin: z.string(),
 	/** Folders on the device to ingest from, each mapped to the folder under recordingsDir it files into. */
 	deviceFolders: z.record(z.string(), z.string()),
-	/** Seconds between device-presence polls in watch mode. */
-	pollIntervalSeconds: z.number().positive(),
-	/** Seconds to wait after the device appears before ingesting. */
-	attachSettleSeconds: z.number().nonnegative(),
 	/** Skip device files modified more recently than this — they may still be recording. */
 	minFileAgeSeconds: z.number().nonnegative(),
 	/** Run the transcription pipeline after pulling. */
@@ -28,8 +24,6 @@ const defaults: Config = {
 	recordingsDir: path.join(os.homedir(), 'Music', 'recordings'),
 	tp7Bin: 'tp7',
 	deviceFolders: { '/recordings': 'meetings', '/memo': 'memos' },
-	pollIntervalSeconds: 15,
-	attachSettleSeconds: 20,
 	minFileAgeSeconds: 120,
 	transcribe: true,
 };
