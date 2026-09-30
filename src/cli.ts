@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { loadConfig } from './config.js';
-import { ingest } from './ingest.js';
+import { ingest, pull, transcribePulled } from './ingest.js';
 import { loadManifest } from './manifest.js';
 import { listDevices } from './tp7.js';
 import { cleanUtterance } from './transcriber/cleaning.js';
@@ -12,7 +12,9 @@ import { watch } from './watch.js';
 const USAGE = `tp7sync — pull recordings off a teenage engineering TP-7 and transcribe them
 
 Usage:
-  bun src/cli.ts now                          Ingest new recordings once
+  bun src/cli.ts now                          Ingest new recordings once (pull, then transcribe)
+  bun src/cli.ts pull                         Pull new recordings off the device
+  bun src/cli.ts transcribe-pulled            Transcribe pulled recordings
   bun src/cli.ts watch                        Watch for the device and ingest on attach
   bun src/cli.ts status                       Show device presence and ingest state
   bun src/cli.ts transcribe <file> [speakers] Transcribe one local audio file (speakers: 3 or 2-5)
@@ -29,8 +31,23 @@ switch (command) {
 		const result = await ingest(config);
 		console.log(
 			`Done: ${result.pulled.length} pulled, ${result.transcribed.length} transcribed, ` +
-				`${result.skipped.length} skipped.`,
+				`${result.skipped.length} skipped, ${result.failed.length} failed.`,
 		);
+		process.exitCode = result.failed.length > 0 ? 1 : 0;
+		break;
+	}
+	case 'pull': {
+		const result = await pull(config);
+		console.log(`Done: ${result.pulled.length} pulled, ${result.skipped.length} skipped.`);
+		break;
+	}
+	case 'transcribe-pulled': {
+		validateEnvironment();
+		const result = await transcribePulled(config);
+		console.log(
+			`Done: ${result.transcribed.length} transcribed, ${result.failed.length} failed.`,
+		);
+		process.exitCode = result.failed.length > 0 ? 1 : 0;
 		break;
 	}
 	case 'watch': {

@@ -50,6 +50,20 @@ final class AudioCapture {
 		return nil
 	}
 
+	/// Whether any process is running audio through the device. A failed
+	/// query reads as running, so callers err toward leaving it alone.
+	static func isRunningSomewhere(_ device: AudioDeviceID) -> Bool {
+		var address = AudioObjectPropertyAddress(
+			mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+			mScope: kAudioObjectPropertyScopeGlobal,
+			mElement: kAudioObjectPropertyElementMain)
+		var running: UInt32 = 0
+		var size = UInt32(MemoryLayout<UInt32>.size)
+		guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &running) == noErr
+		else { return true }
+		return running != 0
+	}
+
 	/// The system default input device — the meeting fallback when the TP-7
 	/// isn't wired (BLE carries gestures but no audio).
 	static func defaultInputDevice() -> AudioDeviceID? {
