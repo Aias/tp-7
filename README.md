@@ -14,9 +14,9 @@ The [tp7 CLI](https://github.com/totocaster/tp7) bridges the two: it sends a dev
 On top of that, tp7sync runs the ingest loop:
 
 1. Detect the TP-7 on USB (cheap; does not disturb audio mode).
-2. List `/recordings` on the device, diff against the manifest at `~/Music/recordings/.tp7sync/manifest.json`.
-3. Pull each new file into `~/Music/recordings`, verifying sizes. Files modified in the last two minutes are skipped in case they are still recording.
-4. Run the transcription pipeline (AssemblyAI diarization → speaker identification → clean-verbatim editing → summary → AI-generated title), which produces a `YYYY-MM-DD_HHMM-title/` folder.
+2. List `/recordings` and `/memo` on the device, diff against the manifest at `~/Music/recordings/.tp7sync/manifest.json`.
+3. Pull each new file into `~/Music/recordings/meetings` (from `/recordings`) or `~/Music/recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset, and ingest posts a notification naming it.
+4. Run the transcription pipeline (AssemblyAI diarization → speaker identification → clean-verbatim editing → summary → AI-generated title) over each pulled file, which produces a `YYYY-MM-DD_HHMM-title/` folder beside it. Pulled files that fail to transcribe are retried on the next run.
 5. Move the WAV into that folder and post a macOS notification.
 
 Recordings already present locally are recorded as `preexisting` and never re-pulled. Device files are never deleted.
@@ -37,22 +37,13 @@ Optional settings overrides go in `~/.config/tp7sync/config.json`; see `src/conf
 
 ```sh
 bun run now         # ingest new recordings once
-bun run watch       # watch for the device, ingest on attach
 bun run status      # device presence + manifest summary
 bun run transcribe <file> [speakers]   # transcribe any local audio file (speakers: 3 or 2-5)
 ```
 
-To run the watcher at login:
-
-```sh
-./scripts/install-launchd.sh
-```
-
-Logs land in `~/Library/Logs/tp7sync.log`.
-
 ## Companion app
 
-`companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. The side buttons hand the moment to Claude Code: a tap writes a brief (current selection and window, or the meeting transcript so far) and opens an interactive session in Ghostty; a memo hold right after the tap adds spoken instructions. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
+`companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. The side buttons hand the moment to Claude Code: a tap writes a brief (current selection and window, or the meeting transcript so far) and opens an interactive session in Ghostty; a memo hold right after the tap adds spoken instructions. Docking the TP-7 ingests once, as soon as no capture or other app is using its audio, and the menu's Ingest Now runs the same ingest on demand. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
 
 To install it as a real app:
 
@@ -64,7 +55,7 @@ The installed app reads the repo location from `~/.config/tp7companion/config.js
 
 ## Caveats
 
-- Switching to MTP briefly takes the device offline as an audio interface. The watcher therefore only auto-ingests when the device is first plugged in, never mid-session; run `bun run now` to ingest on demand while it stays connected.
+- Switching to MTP briefly takes the device offline as an audio interface. Auto-ingest therefore runs only when the device is docked, never mid-session. Use Ingest Now or `bun run now` to ingest on demand while it stays connected.
 - The device takes a few seconds to re-enumerate between modes. The tp7 wrapper retries transient mode-switch errors automatically.
 
 ## Roadmap

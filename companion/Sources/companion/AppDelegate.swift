@@ -19,16 +19,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var instruction: DictationSession?
 	/// Meetings being mixed and transcribed after Stop (or recovered at launch).
 	private var processing = 0
+	private var wired = false
+	/// Launch counts as a dock, so it starts long unwired.
+	private var unwiredSince: Date? = .distantPast
+	private var dockTimer: Timer?
 
 	/// After a side-button tap, a memo hold within this window attaches a
 	/// spoken instruction; otherwise the request goes out as-is.
 	private static let requestSpeakWindow = 4.0
 	/// Finalized speech trails a memo release by a moment.
 	private static let noteSettleSeconds = 1.5
+	/// Shorter gaps in the wired connection are the device re-enumerating
+	/// (someone else's MTP switch, a cable wiggle), not a return to the desk.
+	private static let dockAbsenceSeconds = 30.0
+	/// Wait between dock-ingest attempts, the first included: the device
+	/// needs a moment after attaching before an MTP switch succeeds.
+	private static let dockRetrySeconds = 20.0
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		statusItem = StatusItemController(
-			onIngestNow: { [weak self] in self?.ingestNow() },
+			onIngestNow: { [weak self] in self?.ingest() },
 			onBrowseDevice: { [weak self] in self?.browseDevice() })
 		let midi = MIDIEngine { [weak self] event in
 			Task { @MainActor in self?.handle(event) }
@@ -53,7 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 	private func handle(_ event: MIDIEvent) {
 		switch event {
-		case .presenceChanged(let present, _):
+		case .presenceChanged(let present, let sourceNames):
+			let wired = sourceNames.contains { !$0.hasSuffix("Bluetooth") }
+			if wired != self.wired {
+				self.wired = wired
+				wiredChanged(wired)
+			}
 			// The device drops off MIDI while it re-enumerates for MTP, so
 			// detach handling is suppressed mid-ingest.
 			if !present, let meeting {
@@ -298,21 +313,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
-	private func ingestNow() {
+	/// Only the pull needs the device, which leaves audio mode while it
+	/// runs, so only the pull holds off meetings and dictation;
+	/// transcription follows in the background.
+	private func ingest() {
 		guard !ingesting else { return }
+		dockTimer?.invalidate()
+		dockTimer = nil
 		ingesting = true
 		render()
 		Task {
-			let ok = await Subprocess.runLogged(
-				["bun", "src/cli.ts", "now"], currentDirectory: Paths.repoRoot)
+			let pulled = await Subprocess.runLogged(
+				["bun", "src/cli.ts", "pull"], currentDirectory: Paths.repoRoot)
 			ingesting = false
-			if !ok {
+			if !pulled {
 				Notifier.post(
 					title: "TP-7 ingest failed",
 					message: "See ~/Library/Logs/tp7companion.log")
 			}
 			render()
+			process {
+				let transcribed = await Subprocess.runLogged(
+					["bun", "src/cli.ts", "transcribe-pulled"], currentDirectory: Paths.repoRoot)
+				if !transcribed {
+					Notifier.post(
+						title: "TP-7 transcription failed",
+						message: "See ~/Library/Logs/tp7companion.log")
+				}
+			}
 		}
+	}
+
+	/// Docking ingests once. The device drops off MIDI while its own pull
+	/// re-enumerates it, so absences that begin mid-ingest don't count.
+	private func wiredChanged(_ wired: Bool) {
+		if wired {
+			if let unwiredSince, Date().timeIntervalSince(unwiredSince) >= Self.dockAbsenceSeconds {
+				Log.d("dock: ingesting once the TP-7 is free")
+				dockTimer?.invalidate()
+				dockTimer = Timer.scheduledTimer(
+					withTimeInterval: Self.dockRetrySeconds, repeats: true
+				) { [weak self] _ in
+					Task { @MainActor in self?.dockIngest() }
+				}
+			}
+			unwiredSince = nil
+		} else if !ingesting {
+			unwiredSince = Date()
+			dockTimer?.invalidate()
+			dockTimer = nil
+		}
+	}
+
+	/// Waits out anything the switch to MTP mode would cut off: a capture
+	/// here, or another app (a call) running the TP-7's audio.
+	private func dockIngest() {
+		guard meeting == nil, dictation == nil, instruction == nil, pendingRequest == nil,
+			let device = AudioCapture.findTP7Device(),
+			!AudioCapture.isRunningSomewhere(device)
+		else { return }
+		ingest()
 	}
 
 	/// Snapshots the device tree over MTP (briefly flips the device out of

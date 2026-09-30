@@ -83,7 +83,7 @@ One **Swift menu bar app** is the nucleus (working name: the companion). It owns
 ### App states
 
 ```
-idle ──plug──► attached (indicator shows device; auto-ingest new files once)
+idle ──plug──► attached (indicator shows device; auto-ingest new files once its audio is idle)
 attached ──CC22 press──► recording (menu bar pulses; on stop: wait for file? or capture live)
 attached ──CC27 hold──► dictating (live transcribe → insert at cursor → archive memo)
 attached ──user/menu──► meeting (capture USB audio live → rolling transcript → batch pass after)
@@ -95,7 +95,7 @@ The wheel/rocker/side buttons stay free for a pluggable "control profiles" layer
 ## What already works (validated this session)
 
 - Patched tp7 CLI: audio→MTP switch, ls, pull at ~22 MB/s, return to audio mode — scripted, no device buttons.
-- Full ingest → AssemblyAI/OpenAI pipeline → dated folder grouping in `~/Music/recordings` (`bun run now|watch|status|transcribe`, launchd installer).
+- Full ingest → AssemblyAI/OpenAI pipeline → dated folder grouping in `~/Music/recordings` (`bun run now|status|transcribe`).
 - Greet SysEx round-trip from the shell; identity parse; `mode:` polling (negative result: not a recording detector).
 - ffmpeg capture from the TP-7 as a CoreAudio input device.
 
@@ -104,7 +104,7 @@ The wheel/rocker/side buttons stay free for a pluggable "control profiles" layer
 The ctrl-mode trade (controls decouple from the tape) resolves into two postures with one transition:
 
 - **At the desk (ctrl mode): the Mac is the recorder.** The docked posture requires two device settings: MIDI=`ctrl` (gestures) and **THRU=on** — without THRU the mic never reaches the USB outputs and the Mac captures digital silence (bench-verified at −91 dB). With both set, capture lands directly in the archive and all gestures drive the Mac. The mic occupies USB channels 0/1; channels 2–5 are silent.
-- **Away (normal mode): the device is the recorder.** Memos and recordings land on internal storage; the next dock auto-ingests them. The separate-`/memo`-folder firmware setting keeps memos apart from long recordings.
+- **Away (normal mode): the device is the recorder.** Memos and recordings land on internal storage; the next dock auto-ingests them into `memos/` and `meetings/`. The separate-`/memo`-folder firmware setting keeps memos apart from long recordings.
 - **Wireless (ctrl mode over BLE):** the full control surface works from across the room, but no audio path exists. Meeting capture falls back to the Mac's default input, so the TP-7 acts as a remote trigger with the Mac mic as the room track; dictation and ingest stay wired-only.
 
 The dock/undock mode flip is currently a one-toggle on-device step; the menu bar always shows which posture is active. Whether the TE SysEx mode command can flip the MIDI setting remotely (making docking fully automatic) is a Phase 0 investigation.

@@ -6,8 +6,8 @@ const ManifestEntrySchema = z.object({
 	size: z.number(),
 	status: z.enum(['pulled', 'transcribed', 'preexisting']),
 	pulledAt: z.string().nullable(),
-	/** Folder (relative to recordingsDir) the recording was grouped into. */
-	folder: z.string().nullable(),
+	/** Folder (relative to recordingsDir) holding the recording. */
+	folder: z.string(),
 });
 
 const ManifestSchema = z.object({
@@ -31,8 +31,16 @@ export function loadManifest(recordingsDir: string): Manifest {
 	return ManifestSchema.parse(raw);
 }
 
-export function saveManifest(recordingsDir: string, manifest: Manifest): void {
+/**
+ * Pulling and transcribing run as separate processes, so every change rereads
+ * the manifest and replaces it atomically rather than saving a stale copy.
+ */
+export function updateManifest(recordingsDir: string, update: (manifest: Manifest) => void): void {
+	const manifest = loadManifest(recordingsDir);
+	update(manifest);
 	const file = manifestPath(recordingsDir);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
-	fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+	const staging = `${file}.${process.pid}.tmp`;
+	fs.writeFileSync(staging, `${JSON.stringify(manifest, null, 2)}\n`);
+	fs.renameSync(staging, file);
 }

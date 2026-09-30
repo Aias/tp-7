@@ -8,12 +8,8 @@ const ConfigSchema = z.object({
 	recordingsDir: z.string(),
 	/** Path to the tp7 CLI binary (built by scripts/setup-tp7-cli.sh). */
 	tp7Bin: z.string(),
-	/** Folders on the device to ingest from. */
-	deviceFolders: z.array(z.string()),
-	/** Seconds between device-presence polls in watch mode. */
-	pollIntervalSeconds: z.number().positive(),
-	/** Seconds to wait after the device appears before ingesting. */
-	attachSettleSeconds: z.number().nonnegative(),
+	/** Folders on the device to ingest from, each mapped to the folder under recordingsDir it files into. */
+	deviceFolders: z.record(z.string(), z.string()),
 	/** Skip device files modified more recently than this — they may still be recording. */
 	minFileAgeSeconds: z.number().nonnegative(),
 	/** Run the transcription pipeline after pulling. */
@@ -27,9 +23,7 @@ const CONFIG_PATH = path.join(os.homedir(), '.config', 'tp7sync', 'config.json')
 const defaults: Config = {
 	recordingsDir: path.join(os.homedir(), 'Music', 'recordings'),
 	tp7Bin: 'tp7',
-	deviceFolders: ['/recordings', '/memo'],
-	pollIntervalSeconds: 15,
-	attachSettleSeconds: 20,
+	deviceFolders: { '/recordings': 'meetings', '/memo': 'memos' },
 	minFileAgeSeconds: 120,
 	transcribe: true,
 };
