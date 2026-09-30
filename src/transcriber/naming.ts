@@ -19,6 +19,7 @@ export async function generateTitle(summary: string): Promise<string> {
 		const response = await openai.chat.completions.create({
 			model: MODELS.mechanical,
 			reasoning_effort: 'none',
+			service_tier: 'fast',
 			messages: [
 				{
 					role: 'user',

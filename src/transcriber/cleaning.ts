@@ -97,6 +97,7 @@ async function cleanPassage(text: string, context: string, systemPrompt: string)
 	const response = await openai.chat.completions.create({
 		model: MODELS.mechanical,
 		reasoning_effort: 'none',
+		service_tier: 'fast',
 		messages: [
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user', content: makeUserPrompt(context, text) },

@@ -125,6 +125,7 @@ export async function refineSpeakerIdentification(
 		const response = await openai.chat.completions.parse({
 			model: MODELS.judgment,
 			reasoning_effort: 'medium',
+			service_tier: 'fast',
 			messages: [
 				{ role: 'system', content: makeReconciliationPrompt(knownSpeakers, audioMapping) },
 				{ role: 'user', content: transcriptText },
