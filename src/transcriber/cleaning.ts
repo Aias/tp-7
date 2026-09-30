@@ -18,13 +18,6 @@ const CONCURRENCY = 10;
 // that opens mid-thought still resolves.
 const CONTEXT_CHARS = 500;
 
-// Groups the cache prefix by task so repeated runs land on the same machine.
-const CACHE_KEY = 'audio-transcriber:cleaning';
-
-/**
- * Everything static across a run goes in the system message so it forms a
- * cacheable prefix; only the passage and its context vary per request.
- */
 const makeSystemPrompt = (vocabulary: string[]) =>
 	`You are a transcription editor working on speech-to-text output. You cannot hear the audio, so you must never guess at what was said.
 
@@ -104,7 +97,6 @@ async function cleanPassage(text: string, context: string, systemPrompt: string)
 	const response = await openai.chat.completions.create({
 		model: MODELS.mechanical,
 		reasoning_effort: 'none',
-		prompt_cache_key: CACHE_KEY,
 		messages: [
 			{ role: 'system', content: systemPrompt },
 			{ role: 'user', content: makeUserPrompt(context, text) },
