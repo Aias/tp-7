@@ -1,6 +1,6 @@
 // Shared types for transcription configuration
 
-import type { SpeakerType, TranscribeParams } from 'assemblyai';
+import type { SpeakerIdentificationRequest, TranscribeParams } from 'assemblyai';
 
 export interface CustomSpelling {
 	from: string[];
@@ -8,16 +8,12 @@ export interface CustomSpelling {
 }
 
 /**
- * The SDK declares only `speaker_type` and `known_values` on the speaker
- * identification request, while the API also accepts a roster of expected
- * speakers and an effort level. Drop this for the SDK's own type once it
- * catches up.
+ * The SDK types the speaker identification request without the roster of
+ * expected speakers that the API accepts.
  */
-export interface SpeakerIdentificationOptions {
-	speaker_type: SpeakerType;
-	effort?: 'low' | 'medium';
-	speakers?: { name: string; description?: string }[];
-}
+export type SpeakerIdentificationOptions = SpeakerIdentificationRequest & {
+	speakers?: SpeakerProfile[];
+};
 
 // Extract only the options we want to make configurable. audio, custom_spelling
 // and keyterms_prompt are handled separately; speech_understanding is restated
