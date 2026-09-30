@@ -19,6 +19,7 @@ export async function generateTitle(summary: string): Promise<string> {
 		const response = await openai.chat.completions.create({
 			model: MODELS.mechanical,
 			reasoning_effort: 'none',
+			service_tier: 'fast',
 			messages: [
 				{
 					role: 'user',
@@ -104,12 +105,10 @@ export async function renameOutputFolder(
 
 export function getOutputFilenames(folderName: string): {
 	raw: string;
-	cleaned: string;
 	final: string;
 } {
 	return {
-		raw: `${folderName}-transcript-raw.md`,
-		cleaned: `${folderName}-transcript-cleaned.md`,
+		raw: `${folderName}-transcript-raw.json`,
 		final: `${folderName}-transcript.md`,
 	};
 }

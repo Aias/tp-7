@@ -4,6 +4,7 @@ import { ingest } from './ingest.js';
 import { loadManifest } from './manifest.js';
 import { listDevices } from './tp7.js';
 import { cleanUtterance } from './transcriber/cleaning.js';
+import { streamLive } from './transcriber/live.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
 import { parseAndValidateFile, parseSpeakersArg, validateEnvironment } from './transcriber/utils.js';
 import { watch } from './watch.js';
@@ -16,6 +17,7 @@ Usage:
   bun src/cli.ts status                       Show device presence and ingest state
   bun src/cli.ts transcribe <file> [speakers] Transcribe one local audio file (speakers: 3 or 2-5)
   bun src/cli.ts clean <text>                 Clean one dictated utterance (fillers, punctuation)
+  bun src/cli.ts live                         Stream 16 kHz mono PCM from stdin; print diarized turns as JSON lines
 `;
 
 const config = loadConfig();
@@ -70,6 +72,11 @@ switch (command) {
 			process.exit(1);
 		}
 		process.stdout.write(await cleanUtterance(text));
+		break;
+	}
+	case 'live': {
+		validateEnvironment();
+		await streamLive(Bun.stdin.stream());
 		break;
 	}
 	default: {

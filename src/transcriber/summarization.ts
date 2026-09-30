@@ -26,6 +26,7 @@ export async function summarize(transcript: string): Promise<string> {
 	const response = await openai.chat.completions.create({
 		model: MODELS.judgment,
 		reasoning_effort: 'medium',
+		service_tier: 'fast',
 		messages,
 	});
 

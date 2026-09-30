@@ -7,9 +7,10 @@ export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
  * (cleaning, titling) runs on the cheapest tier with reasoning off — extra
  * reasoning buys nothing on a constrained edit and correlates with more
  * invention. Judgment calls (speaker reconciliation, summarization) run on the
- * flagship.
+ * balanced tier, which scores within a point of the flagship at a fifth of the
+ * price.
  */
 export const MODELS = {
-	mechanical: 'gpt-5.6-luna',
-	judgment: 'gpt-5.6-sol',
+	mechanical: 'gpt-6-luna',
+	judgment: 'gpt-6.1-sol',
 } as const;
