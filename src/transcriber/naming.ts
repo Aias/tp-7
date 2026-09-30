@@ -108,7 +108,7 @@ export function getOutputFilenames(folderName: string): {
 	final: string;
 } {
 	return {
-		raw: `${folderName}-transcript-raw.md`,
+		raw: `${folderName}-transcript-raw.json`,
 		cleaned: `${folderName}-transcript-cleaned.md`,
 		final: `${folderName}-transcript.md`,
 	};
