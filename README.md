@@ -48,7 +48,7 @@ bun run transcribe <file> [speakers]   # transcribe any local audio file (speake
 To install it as a real app:
 
 ```sh
-./scripts/package-app.sh   # builds release, signs, installs /Applications/TP-7 Companion.app
+bun run package-app   # builds release, signs, installs /Applications/TP-7 Companion.app
 ```
 
 The installed app reads the repo location from `~/.config/tp7companion/config.json` (written on first package) and needs that checkout to have `bun install` run and the transcriber's per-machine files in place. Development builds via `swift run` always use their own checkout instead.

@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"now": "bun src/cli.ts now",
+		"package-app": "./scripts/package-app.sh",
 		"status": "bun src/cli.ts status",
 		"transcribe": "bun src/cli.ts transcribe",
 		"typecheck": "tsgo --noEmit"
