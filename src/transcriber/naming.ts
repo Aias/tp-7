@@ -105,12 +105,10 @@ export async function renameOutputFolder(
 
 export function getOutputFilenames(folderName: string): {
 	raw: string;
-	cleaned: string;
 	final: string;
 } {
 	return {
 		raw: `${folderName}-transcript-raw.json`,
-		cleaned: `${folderName}-transcript-cleaned.md`,
 		final: `${folderName}-transcript.md`,
 	};
 }

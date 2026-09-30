@@ -313,7 +313,9 @@ final class MeetingSession {
 
 	/// The first paragraph of the transcript file's summary section.
 	private static func summaryLead(of transcript: URL) -> String {
-		guard let text = try? String(contentsOf: transcript, encoding: .utf8) else {
+		guard let text = try? String(contentsOf: transcript, encoding: .utf8),
+			text.hasPrefix("## Summary")
+		else {
 			return "Transcript ready."
 		}
 		let body = text.replacingOccurrences(of: "## Summary", with: "")
