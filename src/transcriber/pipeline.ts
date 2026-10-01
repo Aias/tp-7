@@ -85,11 +85,14 @@ export interface PipelineResult {
 	folder: string;
 	/** Absolute path of the final transcript inside it. */
 	transcript: string;
-	/** Null when summarization failed. */
+	/** Null when there was no speech or summarization failed. */
 	title: string | null;
 	summary: string | null;
 	speech: boolean;
 }
+
+const hasSpeech = ({ transcript }: TranscriptionResult) =>
+	Boolean(transcript.words?.length) || Boolean(transcript.text?.trim());
 
 function fileTranscript(
 	outputDir: string,
@@ -121,6 +124,18 @@ export async function runFullPipeline(options: TranscriptionOptions): Promise<Pi
 		inputPath,
 		speakers,
 	});
+
+	if (!hasSpeech(transcriptionOutput)) {
+		console.log('🔇 No speech detected.');
+		const { folder, transcript } = fileTranscript(
+			outputDir,
+			transcriptPath,
+			inputPath,
+			'no-speech',
+			'## Transcript\n\nNo speech was detected in this recording.\n',
+		);
+		return { folder, transcript, title: null, summary: null, speech: false };
+	}
 
 	const { cleanedText, summarized } = await cleanAndSummarize(transcriptionOutput);
 
