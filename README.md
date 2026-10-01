@@ -1,6 +1,6 @@
 # tp7sync
 
-Pulls recordings off a teenage engineering TP-7 field recorder, transcribes them, and files everything into `~/Recordings` — one folder per recording, holding the raw WAV, diarized transcripts, and an AI summary.
+Pulls recordings off a teenage engineering TP-7 field recorder, transcribes them, and files everything into `~/Recordings` — one folder per recording, holding the audio, diarized transcripts, and an AI summary.
 
 ## How it works
 
@@ -17,7 +17,7 @@ On top of that, tp7sync runs the ingest loop:
 2. List `/recordings` and `/memo` on the device, diff against the manifest at `~/Recordings/.tp7sync/manifest.json`.
 3. Pull each new file into `~/Recordings/meetings` (from `/recordings`) or `~/Recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset: pull emits a `misdated` event for it, and `redate` records the right start time.
 4. Run the transcription pipeline (AssemblyAI diarization → speaker identification and clean-verbatim editing → summary and title) over each pulled file, up to three at once, which produces a `YYYY-MM-DD_HHMM-title/` folder beside it. Pulled files that fail to transcribe are retried on the next run.
-5. Move the WAV into that folder.
+5. Move the WAV into that folder and replace it with a lossless FLAC once the FLAC's duration matches. The manifest keeps the device file name.
 
 Recordings already present locally are recorded as `preexisting` and never re-pulled. Device files are never deleted.
 

@@ -1,9 +1,20 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 
-// Initialize ffmpeg
-ffmpeg.setFfmpegPath(ffmpegPath as string);
+function resolveFfmpegPath(): string {
+	if (!ffmpegPath) {
+		throw new Error('ffmpeg-static has no ffmpeg binary for this platform');
+	}
+	return ffmpegPath;
+}
+
+const FFMPEG_PATH = resolveFfmpegPath();
+ffmpeg.setFfmpegPath(FFMPEG_PATH);
+
+// A FLAC that decodes to a different length than its WAV is a failed encode.
+const MAX_DURATION_DRIFT_SECONDS = 0.1;
 
 /**
  * Downmix to the 16 kHz mono signal AssemblyAI resamples to internally, encoded
@@ -29,5 +40,48 @@ export async function convertToFlac(inputPath: string, outputDir: string): Promi
 			.save(flacPath),
 	);
 
+	return flacPath;
+}
+
+async function readDuration(filePath: string): Promise<number> {
+	const proc = Bun.spawn([FFMPEG_PATH, '-hide_banner', '-i', filePath], {
+		stdout: 'ignore',
+		stderr: 'pipe',
+	});
+	const stderr = await new Response(proc.stderr).text();
+	await proc.exited;
+	const match = stderr.match(/Duration: (\d+):(\d{2}):(\d{2}(?:\.\d+)?)/);
+	if (!match) {
+		throw new Error(`Could not read the duration of ${filePath}`);
+	}
+	return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+}
+
+/**
+ * Replaces a WAV with a FLAC of the same name, lossless and with its channels
+ * unchanged. The WAV is deleted only after the FLAC reports the same duration.
+ */
+export async function archiveAsFlac(wavPath: string): Promise<string> {
+	const flacPath = wavPath.replace(/\.wav$/i, '.flac');
+	try {
+		await new Promise<void>((resolve, reject) =>
+			ffmpeg(wavPath)
+				.format('flac')
+				.on('error', reject)
+				.on('end', () => resolve())
+				.save(flacPath),
+		);
+		const [wavDuration, flacDuration] = await Promise.all([
+			readDuration(wavPath),
+			readDuration(flacPath),
+		]);
+		if (Math.abs(wavDuration - flacDuration) > MAX_DURATION_DRIFT_SECONDS) {
+			throw new Error(`FLAC is ${flacDuration}s long, the WAV ${wavDuration}s`);
+		}
+	} catch (error) {
+		fs.rmSync(flacPath, { force: true });
+		throw error;
+	}
+	fs.rmSync(wavPath);
 	return flacPath;
 }
