@@ -25,7 +25,7 @@ final class DictationSession {
 		let audioDir = Paths.memosDir.appendingPathComponent("audio")
 		try? FileManager.default.createDirectory(
 			at: audioDir, withIntermediateDirectories: true)
-		audioURL = audioDir.appendingPathComponent("\(Self.timestamp())-dictation.wav")
+		audioURL = audioDir.appendingPathComponent("\(Self.timestamp())-dictation.flac")
 	}
 
 	/// Ensures the on-device transcription model is installed. The model

@@ -56,7 +56,7 @@ One **Swift menu bar app** is the nucleus (working name: the companion). It owns
   TP-7 ────USB────► │  DeviceMonitor (HAL UID + CoreMIDI)     │
    │                │  GestureListener (ctrl-mode CCs)        │
    │ audio          │  AudioCapture (AVAudioEngine, AUHAL)    │
-   ├───────────────►│    ├─► 96kHz archive WAV                │
+   ├───────────────►│    ├─► mono 48kHz archive FLAC          │
    │ MIDI           │    └─► 16kHz mono → SpeechTranscriber   │
    ├───────────────►│  Inserter (pasteboard + Cmd-V CGEvent)  │
    │ MTP (on switch)│  Ingestor (SysEx switch → tp7 pull)     │
@@ -75,7 +75,7 @@ One **Swift menu bar app** is the nucleus (working name: the companion). It owns
 - **Menu bar**: AppDelegate-managed `NSStatusItem` with template SF Symbols per state and timer-driven frame swaps for a recording pulse — not `MenuBarExtra` (no NSStatusItem access, `.menu` style stalls timers, Tahoe regression makes hosted SwiftUI animation laggy). Settings = self-owned `NSWindow` with activation-policy flip (the `openSettings` path broke on macOS 26).
 - **Live transcription**: dictation uses Apple's **SpeechTranscriber/SpeechAnalyzer** (macOS 26, on-device, free, volatile+final results with audio time ranges, consumes arbitrary buffers). On close-talk dictation it trails cloud streaming by about a point of WER (4.5% vs 3.2%, fillers excluded). Meetings stream the mixed mic and system audio to **AssemblyAI Universal-3.6 Pro** with diarization (~$0.57/hr), because on far-field meeting audio SpeechTranscriber measured 16.3% WER against 4.5% for the stream.
 - **Second pass** (speaker diarization + summaries): keep the existing AssemblyAI/OpenAI pipeline; local alternative worth evaluating: **FluidAudio** (CoreML pyannote diarization, Apache-2.0).
-- **Audio capture**: input-only `AVAudioEngine`, device pinned via `kAudioOutputUnitProperty_CurrentDevice` (no AVFoundation API exists for this), tap at hardware format, fork to archive-WAV + a long-lived `AVAudioConverter` down to 16 kHz mono for the transcriber. Persist the TP-7's device UID; re-arm on reappearance. Mic TCC permission is required even for external interfaces.
+- **Audio capture**: input-only `AVAudioEngine`, device pinned via `kAudioOutputUnitProperty_CurrentDevice` (no AVFoundation API exists for this), tap at hardware format, fork to a channel-0 mono 48 kHz 16-bit FLAC archive + a long-lived `AVAudioConverter` down to 16 kHz mono for the transcriber. Persist the TP-7's device UID; re-arm on reappearance. Mic TCC permission is required even for external interfaces.
 - **Text insertion**: the VoiceInk pattern — transient-tagged pasteboard write + synthesized Cmd-V via CGEvent, guarded clipboard restore. AX `setValue` insertion is unreliable on Electron/web views; raw CGEvent typing truncates at 20 UTF-16 units per event. Needs Accessibility permission. Consequence: **Developer-ID notarized direct distribution, no sandbox, no App Store** — which also frees file and device access.
 - **Archive**: **GRDB + SQLite FTS5**, external-content table over *segments* (utterance rows with transcript id, time range, speaker) via `synchronize(withTable:)`, porter tokenizer, bm25 ranking, snippet highlighting. Optional semantic layer later: `NLContextualEmbedding` + brute-force cosine (small enough at this scale); skip sqlite-vec.
 - **File ingest**: SysEx mode-switch + MTP pull, as tp7sync does today (shell out to the patched `tp7` CLI initially; native Swift MTP is a later option, not a requirement).

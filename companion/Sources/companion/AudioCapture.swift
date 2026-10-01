@@ -4,12 +4,12 @@ import CoreAudio
 /// Captures audio from the TP-7's input over USB, pinned to that specific
 /// device (AVFoundation has no API for input-device selection, so the
 /// device is set on the input node's underlying audio unit). Buffers are
-/// delivered converted to the requested format; the raw hardware-format
-/// stream is also written to a file for the archive.
+/// delivered converted to the requested format; channel 0 is also archived
+/// as mono FLAC when an archive URL is given.
 final class AudioCapture {
 	private let engine = AVAudioEngine()
 	private var converter: AVAudioConverter?
-	private var archiveFile: AVAudioFile?
+	private var archive: (file: AVAudioFile, converter: AVAudioConverter)?
 	/// Only touched from the audio tap, which runs serially.
 	private nonisolated(unsafe) var bufferCount = 0
 
@@ -82,9 +82,52 @@ final class AudioCapture {
 		return device
 	}
 
+	/// Opens an archive for writing: mono, 48 kHz, 16-bit FLAC. The TP-7's mic
+	/// lives on channel 0 and its other five channels carry no signal.
+	/// AVAudioFile only writes 16-bit when its processing format is Int16;
+	/// with the Float32 default the FLAC comes out 24-bit.
+	static func openArchive(at url: URL) throws -> AVAudioFile {
+		try AVAudioFile(
+			forWriting: url,
+			settings: [
+				AVFormatIDKey: kAudioFormatFLAC,
+				AVSampleRateKey: 48_000.0,
+				AVNumberOfChannelsKey: 1,
+				AVLinearPCMBitDepthKey: 16,
+			],
+			commonFormat: .pcmFormatInt16, interleaved: false)
+	}
+
+	/// Converts one tap buffer. The converter keeps its sample-rate state
+	/// across calls, so each stream needs a converter of its own.
+	static func convert(
+		_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter
+	) throws -> AVAudioPCMBuffer {
+		let format = converter.outputFormat
+		let ratio = format.sampleRate / converter.inputFormat.sampleRate
+		let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
+		guard let converted = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
+			throw CaptureError.bufferUnavailable
+		}
+		nonisolated(unsafe) var consumed = false
+		var error: NSError?
+		converter.convert(to: converted, error: &error) { _, outStatus in
+			if consumed {
+				outStatus.pointee = .noDataNow
+				return nil
+			}
+			consumed = true
+			outStatus.pointee = .haveData
+			return buffer
+		}
+		if let error {
+			throw error
+		}
+		return converted
+	}
+
 	/// Starts capture from the given device, delivering buffers converted to
-	/// `outputFormat` and, when `archiveURL` is set, archiving the raw
-	/// hardware-format stream there.
+	/// `outputFormat` and, when `archiveURL` is set, archiving channel 0 there.
 	func start(
 		device: AudioDeviceID,
 		outputFormat: AVAudioFormat,
@@ -117,17 +160,16 @@ final class AudioCapture {
 		// primary channel of any ordinary mic.
 		converter.channelMap = [0]
 		self.converter = converter
-		// AVAudioFile requires interleaved file settings; write() converts
-		// from the deinterleaved tap buffers.
-		archiveFile = try archiveURL.map { url in
-			try AVAudioFile(
-				forWriting: url,
-				settings: [
-					AVFormatIDKey: kAudioFormatLinearPCM,
-					AVSampleRateKey: hardwareFormat.sampleRate,
-					AVNumberOfChannelsKey: hardwareFormat.channelCount,
-					AVLinearPCMBitDepthKey: 24,
-				])
+		archive = try archiveURL.map { url in
+			let file = try Self.openArchive(at: url)
+			guard
+				let archiveConverter = AVAudioConverter(
+					from: hardwareFormat, to: file.processingFormat)
+			else {
+				throw CaptureError.converterUnavailable
+			}
+			archiveConverter.channelMap = [0]
+			return (file, archiveConverter)
 		}
 		bufferCount = 0
 
@@ -138,36 +180,25 @@ final class AudioCapture {
 			if self.bufferCount == 1 || self.bufferCount % 100 == 0 {
 				Log.d("capture: buffer #\(self.bufferCount), \(buffer.frameLength) frames")
 			}
+			if let archive = self.archive {
+				do {
+					try archive.file.write(from: Self.convert(buffer, with: archive.converter))
+				} catch {
+					if self.bufferCount == 1 {
+						Log.d("capture: archive write failed: \(error)")
+					}
+				}
+			}
+			guard let converter = self.converter else { return }
 			do {
-				try self.archiveFile?.write(from: buffer)
+				let converted = try Self.convert(buffer, with: converter)
+				if converted.frameLength > 0 {
+					onBuffer(converted)
+				}
 			} catch {
-				if self.bufferCount == 1 {
-					Log.d("capture: archive write failed: \(error)")
-				}
-			}
-			let ratio = outputFormat.sampleRate / hardwareFormat.sampleRate
-			let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
-			guard
-				let converted = AVAudioPCMBuffer(
-					pcmFormat: outputFormat, frameCapacity: capacity)
-			else { return }
-			nonisolated(unsafe) var consumed = false
-			var error: NSError?
-			self.converter?.convert(to: converted, error: &error) { _, outStatus in
-				if consumed {
-					outStatus.pointee = .noDataNow
-					return nil
-				}
-				consumed = true
-				outStatus.pointee = .haveData
-				return buffer
-			}
-			if let error {
 				if self.bufferCount == 1 {
 					Log.d("capture: conversion failed: \(error)")
 				}
-			} else if converted.frameLength > 0 {
-				onBuffer(converted)
 			}
 		}
 		try engine.start()
@@ -178,12 +209,13 @@ final class AudioCapture {
 		engine.inputNode.removeTap(onBus: 0)
 		engine.stop()
 		converter = nil
-		archiveFile = nil
+		archive = nil
 	}
 
 	enum CaptureError: Error {
 		case noInputUnit
 		case deviceSelectionFailed(OSStatus)
 		case converterUnavailable
+		case bufferUnavailable
 	}
 }
