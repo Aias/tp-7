@@ -293,17 +293,29 @@ final class MeetingSession {
 			return
 		}
 		writeMarkers()
-		writeLiveTranscript()
+		let hasLiveTranscript = writeLiveTranscript()
 		Notifier.post(
 			title: "Meeting captured",
 			message: "Transcribing \(Self.hms(duration)) of audio…")
-		await Self.process(stamp: stamp, duration: duration)
+		await Self.process(
+			stamp: stamp, duration: duration, draftFrom: hasLiveTranscript ? liveURL : nil)
 	}
 
 	/// Mixes a finished capture's tracks, runs the batch transcription
 	/// pipeline, and groups everything into the folder it reports. Shared
-	/// by the live Stop path and the launch-time recovery sweep.
-	static func process(stamp: String, duration: TimeInterval) async {
+	/// by the live Stop path and the launch-time recovery sweep. A live
+	/// transcript to draft from gets a draft notification while the
+	/// pipeline runs, replaced by the final one under the same identifier.
+	static func process(
+		stamp: String, duration: TimeInterval, draftFrom live: URL? = nil
+	) async {
+		let identifier = "meeting-\(stamp)"
+		var finalAnnounced = false
+		if let live {
+			Task {
+				await postDraft(from: live, identifier: identifier) { finalAnnounced }
+			}
+		}
 		let input = await mixTracks(stamp: stamp)
 		var finished: PipelineResult?
 		let ok = await Subprocess.runLogged(
@@ -312,7 +324,10 @@ final class MeetingSession {
 		) { event in
 			guard case .result(let result) = event else { return }
 			finished = result
-			Notifier.announce(result, silence: "No words in \(hms(duration)) of audio.")
+			finalAnnounced = true
+			Notifier.announce(
+				result, silence: "No words in \(hms(duration)) of audio.",
+				identifier: identifier)
 		}
 		guard let finished else {
 			Notifier.post(
@@ -324,6 +339,24 @@ final class MeetingSession {
 			Log.d("meeting: pipeline failed after reporting a result for \(stamp)")
 		}
 		groupArtifacts(stamp: stamp, into: finished.folder)
+	}
+
+	/// Posts the fast model's title and summary of the live transcript while
+	/// the batch pipeline is still running, unless the final result got
+	/// there first. It has no click target: the live file moves into the
+	/// titled folder once the pipeline finishes.
+	private static func postDraft(
+		from live: URL, identifier: String, superseded: @MainActor () -> Bool
+	) async {
+		_ = await Subprocess.runLogged(
+			["bun", "src/cli.ts", "draft-summary", live.path],
+			currentDirectory: Paths.repoRoot
+		) { event in
+			guard case .draft(let title, let summary) = event, !superseded() else { return }
+			Notifier.post(
+				title: "Draft: \(title)", message: Notifier.lead(of: summary) ?? summary,
+				identifier: identifier)
+		}
 	}
 
 	/// Captures the companion never finished processing — a quit or crash
@@ -448,11 +481,13 @@ final class MeetingSession {
 	}
 
 	/// The rolling transcript, kept beside the pipeline's as a first draft.
-	private func writeLiveTranscript() {
+	/// Returns whether the meeting produced any text to keep.
+	private func writeLiveTranscript() -> Bool {
 		let transcript = liveTranscript()
-		guard !transcript.isEmpty else { return }
+		guard !transcript.isEmpty else { return false }
 		let content = "# Live transcript\n\n" + transcript + "\n"
 		try? content.write(to: liveURL, atomically: true, encoding: .utf8)
+		return true
 	}
 
 	/// Crash recovery only, for a capture whose pipeline result was lost: its
