@@ -1,11 +1,15 @@
 #!/usr/bin/env bun
 import { loadConfig } from './config.js';
+import { emit } from './events.js';
 import { ingest, pull, transcribePulled } from './ingest.js';
 import { loadManifest } from './manifest.js';
 import { listDevices } from './tp7.js';
 import { cleanUtterance } from './transcriber/cleaning.js';
 import { streamLive } from './transcriber/live.js';
+import { humanizeTitle } from './transcriber/naming.js';
+import { MODELS } from './transcriber/openai.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
+import { summarizeAndTitle } from './transcriber/summarization.js';
 import { parseAndValidateFile, parseSpeakersArg, validateEnvironment } from './transcriber/utils.js';
 
 const USAGE = `tp7sync — pull recordings off a teenage engineering TP-7 and transcribe them
@@ -17,6 +21,7 @@ Usage:
   bun src/cli.ts status                       Show device presence and ingest state
   bun src/cli.ts transcribe <file> [speakers] Transcribe one local audio file (speakers: 3 or 2-5)
   bun src/cli.ts clean <text>                 Clean one dictated utterance (fillers, punctuation)
+  bun src/cli.ts draft-summary <file>         Summarize a live transcript with the fast model
   bun src/cli.ts live                         Stream 16 kHz mono PCM from stdin; print diarized turns as JSON lines
 `;
 
@@ -82,6 +87,22 @@ switch (command) {
 			process.exit(1);
 		}
 		process.stdout.write(await cleanUtterance(text));
+		break;
+	}
+	case 'draft-summary': {
+		validateEnvironment();
+		const filePath = parseAndValidateFile(
+			process.argv[3],
+			'⛔ Please provide a live transcript file',
+		);
+		const text = await Bun.file(filePath).text();
+		const transcript = text.replace(/^# Live transcript\s*/, '').trim();
+		if (!transcript) {
+			console.error('⛔ The live transcript has no text');
+			process.exit(1);
+		}
+		const { title, summary } = await summarizeAndTitle(transcript, MODELS.mechanical);
+		emit({ event: 'draft', title: humanizeTitle(title), summary });
 		break;
 	}
 	case 'live': {
