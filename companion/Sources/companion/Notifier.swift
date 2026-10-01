@@ -2,18 +2,38 @@ import AppKit
 import UserNotifications
 
 /// Posts macOS notifications. The installed app (bundled) uses
-/// UNUserNotificationCenter so a click can open the capture's transcript;
-/// a bare `swift run` build has no bundle identity, which that framework
-/// requires, so it falls back to osascript and clicks do nothing.
+/// UNUserNotificationCenter so a click can open the capture's transcript
+/// and a notification can take a typed reply; a bare `swift run` build has
+/// no bundle identity, which that framework requires, so it falls back to
+/// osascript, where clicks and replies do nothing.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 	private static let shared = Notifier()
 	private static let bundled = Bundle.main.bundleIdentifier != nil
+	private static var startTimeReply: (@MainActor (_ file: String, _ time: String) -> Void)?
 
-	static func prepare() {
+	private nonisolated static let setStartTimeAction = "set-start-time"
+
+	private static let unsetClockCategory = UNNotificationCategory(
+		identifier: "unset-clock",
+		actions: [
+			UNTextInputNotificationAction(
+				identifier: setStartTimeAction, title: "Set start time", options: [],
+				textInputButtonTitle: "Set",
+				textInputPlaceholder: "2026-09-30 11:15 or 11:15")
+		],
+		intentIdentifiers: [])
+
+	/// `onStartTime` receives the reply to an unset-clock notification: the
+	/// device file it was posted for and the start time typed.
+	static func prepare(
+		onStartTime: @escaping @MainActor (_ file: String, _ time: String) -> Void
+	) {
 		guard bundled else { return }
+		startTimeReply = onStartTime
 		let center = UNUserNotificationCenter.current()
 		center.delegate = shared
+		center.setNotificationCategories([unsetClockCategory])
 		center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
 			Log.d("notifications granted: \(granted)")
 		}
@@ -38,6 +58,30 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 		if let url {
 			content.userInfo = ["url": url.absoluteString]
 		}
+		add(content, identifier: identifier)
+	}
+
+	/// A recording the device dated 1980 has no real start time. The bundled
+	/// app's notification takes one as a typed reply; a `swift run` build
+	/// can't, so its notification says how to set it by hand.
+	static func postUnsetClock(file: String) {
+		let title = "TP-7 clock was unset"
+		guard bundled else {
+			post(
+				title: title,
+				message: "\(file) is dated 1980. Replying here needs the installed app; "
+					+ "run bun src/cli.ts redate \(file) <time> instead.")
+			return
+		}
+		let content = UNMutableNotificationContent()
+		content.title = title
+		content.body = "\(file) is dated 1980. Choose Set start time to correct it."
+		content.categoryIdentifier = unsetClockCategory.identifier
+		content.userInfo = ["file": file]
+		add(content, identifier: "unset-clock-\(file)")
+	}
+
+	private static func add(_ content: UNMutableNotificationContent, identifier: String?) {
 		let request = UNNotificationRequest(
 			identifier: identifier ?? UUID().uuidString, content: content, trigger: nil)
 		UNUserNotificationCenter.current().add(request)
@@ -83,9 +127,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 		_ center: UNUserNotificationCenter,
 		didReceive response: UNNotificationResponse
 	) async {
-		guard let raw = response.notification.request.content.userInfo["url"] as? String,
-			let url = URL(string: raw)
-		else { return }
+		let userInfo = response.notification.request.content.userInfo
+		if response.actionIdentifier == Self.setStartTimeAction,
+			let reply = response as? UNTextInputNotificationResponse,
+			let file = userInfo["file"] as? String
+		{
+			let time = reply.userText
+			await MainActor.run { Self.startTimeReply?(file, time) }
+			return
+		}
+		guard let raw = userInfo["url"] as? String, let url = URL(string: raw) else { return }
 		_ = await MainActor.run { NSWorkspace.shared.open(url) }
 	}
 

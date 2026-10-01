@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	/// Meetings being mixed and transcribed after Stop (or recovered at
 	/// launch) and recordings transcribed after a pull, oldest first.
 	private var jobs: [Job] = []
+	private var manifestTail: Task<Void, Never>?
 	private var wired = false
 	/// Launch counts as a dock, so it starts long unwired.
 	private var unwiredSince: Date? = .distantPast
@@ -57,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 		self.midi = midi
 		midi.start()
-		Notifier.prepare()
+		Notifier.prepare { [weak self] file, time in self?.redate(file: file, to: time) }
 		if !TextInserter.accessibilityGranted {
 			TextInserter.requestAccessibility()
 		}
@@ -238,15 +239,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	/// Runs pipeline work as a job the menu shows, with the stage the work
 	/// reports.
 	private func process(
-		_ activity: String, _ work: @escaping @MainActor (StageReport) async -> Void
+		_ activity: String, _ work: @escaping @MainActor (@escaping StageReport) async -> Void
 	) {
 		let job = Job(activity: activity)
 		jobs.append(job)
 		render()
 		Task {
-			await work { [weak self] stage in
+			await work { stage in
 				job.stage = stage
-				self?.render()
+				self.render()
 			}
 			jobs.removeAll { $0 === job }
 			render()
@@ -354,7 +355,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		render()
 		Task {
 			let pulled = await Subprocess.runLogged(
-				["bun", "src/cli.ts", "pull"], currentDirectory: Paths.repoRoot)
+				["bun", "src/cli.ts", "pull"], currentDirectory: Paths.repoRoot
+			) { event in
+				if case .misdated(let file) = event {
+					Notifier.postUnsetClock(file: file)
+				}
+			}
 			ingesting = false
 			if !pulled {
 				Notifier.post(
@@ -363,26 +369,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			}
 			render()
 			process("transcribing recordings") { report in
-				let transcribed = await Subprocess.runLogged(
-					["bun", "src/cli.ts", "transcribe-pulled"],
-					currentDirectory: Paths.repoRoot
+				await self.inManifestLane {
+					await self.transcribePulled(report: report)
+				}
+			}
+		}
+	}
+
+	private func transcribePulled(report: StageReport) async {
+		let transcribed = await Subprocess.runLogged(
+			["bun", "src/cli.ts", "transcribe-pulled"], currentDirectory: Paths.repoRoot
+		) { event in
+			switch event {
+			case .stage(let stage, _):
+				report(stage)
+			case .result(let result):
+				report(nil)
+				Notifier.announce(
+					result, silence: "No words in \(result.input.lastPathComponent).")
+			default:
+				break
+			}
+		}
+		if !transcribed {
+			Notifier.post(
+				title: "TP-7 transcription failed",
+				message: "See ~/Library/Logs/tp7companion.log")
+		}
+	}
+
+	/// Transcription and redating both rewrite the manifest entries a
+	/// recording moves through, so they run one at a time. A start time
+	/// typed while a recording is still transcribing therefore applies once
+	/// it has a folder to rename.
+	private func inManifestLane(_ work: @escaping @MainActor () async -> Void) async {
+		let previous = manifestTail
+		let task = Task {
+			await previous?.value
+			await work()
+		}
+		manifestTail = task
+		await task.value
+	}
+
+	/// Sets the start time of a recording the device dated 1980 and reports
+	/// the folder it ended up in.
+	private func redate(file: String, to time: String) {
+		let time = time.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard !time.isEmpty else { return }
+		Task {
+			await inManifestLane {
+				var filed: URL?
+				let redated = await Subprocess.runLogged(
+					["bun", "src/cli.ts", "redate", file, time], currentDirectory: Paths.repoRoot
 				) { event in
-					switch event {
-					case .stage(let stage, _):
-						report(stage)
-					case .result(let result):
-						report(nil)
-						Notifier.announce(
-							result, silence: "No words in \(result.input.lastPathComponent).")
-					default:
-						break
+					if case .redated(_, let folder) = event {
+						filed = folder
 					}
 				}
-				if !transcribed {
+				guard redated else {
 					Notifier.post(
-						title: "TP-7 transcription failed",
-						message: "See ~/Library/Logs/tp7companion.log")
+						title: "Could not set the start time",
+						message: "\(file) was not set to \"\(time)\". Use YYYY-MM-DD HH:MM or "
+							+ "HH:MM; see ~/Library/Logs/tp7companion.log.")
+					return
 				}
+				guard let filed else {
+					Notifier.post(
+						title: "Start time set",
+						message: "\(file) will be filed by it once transcribed.")
+					return
+				}
+				Notifier.post(
+					title: "Start time set",
+					message: TranscriptFolder(name: filed.lastPathComponent)?.menuTitle
+						?? filed.lastPathComponent,
+					opening: filed)
 			}
 		}
 	}
