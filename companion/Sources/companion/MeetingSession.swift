@@ -95,6 +95,18 @@ final class MeetingSession {
 		Log.d("meeting: disarmed \(stamp)")
 	}
 
+	/// A live mic rises above the silence floor well within this long.
+	private static let silenceCheckSeconds = 5.0
+	private var capturingMacMic = false
+
+	/// The system-audio track is never judged: silence there is normal for
+	/// an in-person meeting.
+	private func warnIfMicSilent() {
+		guard micFile != nil, capture.isSilent else { return }
+		Log.d("meeting: mic silent \(Int(Self.silenceCheckSeconds)) s into recording")
+		Notifier.postSilentMic(macMicrophone: capturingMacMic)
+	}
+
 	func start() async throws {
 		guard !cancelled else { return }
 		let context = await CaptureContext.current()
@@ -105,6 +117,7 @@ final class MeetingSession {
 			device = tp7
 		} else if let fallback = AudioCapture.defaultInputDevice() {
 			device = fallback
+			capturingMacMic = true
 			Log.d("meeting: TP-7 not on USB, capturing the default input device")
 			Notifier.post(
 				title: "Recording with the Mac microphone",
@@ -182,6 +195,10 @@ final class MeetingSession {
 		}
 		phase = .recording
 		Log.d("meeting: recording → \(micURL.lastPathComponent)")
+		Task { [weak self] in
+			try? await Task.sleep(for: .seconds(Self.silenceCheckSeconds))
+			self?.warnIfMicSilent()
+		}
 	}
 
 	func pause() {

@@ -59,4 +59,19 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 	private static func quoted(_ text: String) -> String {
 		"\"\(text.replacingOccurrences(of: "\"", with: "\\\""))\""
 	}
+
+	/// Warns that a capture's mic channel stayed below the silence floor.
+	/// `macMicrophone` is for captures from the Mac's default input rather
+	/// than the TP-7, where THRU is irrelevant.
+	static func postSilentMic(macMicrophone: Bool = false) {
+		if macMicrophone {
+			post(
+				title: "Mac mic is silent",
+				message: "Nothing is coming from the default input. Check that it isn't muted.")
+		} else {
+			post(
+				title: "TP-7 mic is silent",
+				message: "Nothing reached the Mac. Check that THRU is on.")
+		}
+	}
 }

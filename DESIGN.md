@@ -103,7 +103,7 @@ The wheel/rocker/side buttons stay free for a pluggable "control profiles" layer
 
 The ctrl-mode trade (controls decouple from the tape) resolves into two postures with one transition:
 
-- **At the desk (ctrl mode): the Mac is the recorder.** The docked posture requires two device settings: MIDI=`ctrl` (gestures) and **THRU=on** — without THRU the mic never reaches the USB outputs and the Mac captures digital silence (bench-verified at −91 dB). With both set, capture lands directly in the archive and all gestures drive the Mac. The mic occupies USB channels 0/1; channels 2–5 are silent.
+- **At the desk (ctrl mode): the Mac is the recorder.** The docked posture requires two device settings: MIDI=`ctrl` (gestures) and **THRU=on** — without THRU the mic never reaches the USB outputs and the Mac captures digital silence (bench-verified at −91 dB); a dictation, or a meeting's mic five seconds in, that never rises above −80 dBFS posts a warning. With both set, capture lands directly in the archive and all gestures drive the Mac. The mic occupies USB channels 0/1; channels 2–5 are silent.
 - **Away (normal mode): the device is the recorder.** Memos and recordings land on internal storage; the next dock auto-ingests them into `memos/` and `meetings/`. The separate-`/memo`-folder firmware setting keeps memos apart from long recordings.
 - **Wireless (ctrl mode over BLE):** the full control surface works from across the room, but no audio path exists. Meeting capture falls back to the Mac's default input, so the TP-7 acts as a remote trigger with the Mac mic as the room track; dictation and ingest stay wired-only.
 

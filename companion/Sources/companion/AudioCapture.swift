@@ -1,17 +1,42 @@
+import Accelerate
 @preconcurrency import AVFoundation
 import CoreAudio
+import Synchronization
 
 /// Captures audio from the TP-7's input over USB, pinned to that specific
 /// device (AVFoundation has no API for input-device selection, so the
 /// device is set on the input node's underlying audio unit). Buffers are
 /// delivered converted to the requested format; channel 0 is also archived
-/// as mono FLAC when an archive URL is given.
+/// as mono FLAC when an archive URL is given. The peak level of channel 0
+/// is tracked for the whole capture.
 final class AudioCapture {
+	private struct Level {
+		var peak: Float = 0
+		var frames = 0
+	}
+
 	private let engine = AVAudioEngine()
 	private var converter: AVAudioConverter?
 	private var archive: (file: AVAudioFile, converter: AVAudioConverter)?
+	/// Written from the audio tap and read from the main actor.
+	private let level = Mutex(Level())
 	/// Only touched from the audio tap, which runs serially.
 	private nonisolated(unsafe) var bufferCount = 0
+
+	/// With THRU off the TP-7 sends the Mac digital silence (about −91 dBFS),
+	/// so a channel that never rises above this carries no live mic.
+	static let silenceFloorDecibels: Float = -80
+
+	/// The highest sample magnitude on channel 0 since `start`, in dBFS, or
+	/// nil until audio has arrived.
+	var peakDecibels: Float? {
+		level.withLock { $0.frames > 0 ? 20 * log10($0.peak) : nil }
+	}
+
+	/// Whether audio arrived and channel 0 never rose above the silence floor.
+	var isSilent: Bool {
+		peakDecibels.map { $0 < Self.silenceFloorDecibels } ?? false
+	}
 
 	/// Finds the TP-7's CoreAudio device id by name prefix.
 	static func findTP7Device() -> AudioDeviceID? {
@@ -172,6 +197,7 @@ final class AudioCapture {
 			return (file, archiveConverter)
 		}
 		bufferCount = 0
+		level.withLock { $0 = Level() }
 
 		engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) {
 			[weak self] buffer, _ in
@@ -180,6 +206,7 @@ final class AudioCapture {
 			if self.bufferCount == 1 || self.bufferCount % 100 == 0 {
 				Log.d("capture: buffer #\(self.bufferCount), \(buffer.frameLength) frames")
 			}
+			self.measure(buffer)
 			if let archive = self.archive {
 				do {
 					try archive.file.write(from: Self.convert(buffer, with: archive.converter))
@@ -205,11 +232,25 @@ final class AudioCapture {
 		Log.d("capture: engine started")
 	}
 
+	/// Folds the buffer's channel 0 into the running peak.
+	private func measure(_ buffer: AVAudioPCMBuffer) {
+		guard let samples = buffer.floatChannelData?[0] else { return }
+		let frames = Int(buffer.frameLength)
+		let peak = vDSP.maximumMagnitude(UnsafeBufferPointer(start: samples, count: frames))
+		level.withLock {
+			$0.peak = max($0.peak, peak)
+			$0.frames += frames
+		}
+	}
+
 	func stop() {
 		engine.inputNode.removeTap(onBus: 0)
 		engine.stop()
 		converter = nil
 		archive = nil
+		if let peak = peakDecibels {
+			Log.d("capture: stopped, channel 0 peak \(String(format: "%.1f", peak)) dBFS")
+		}
 	}
 
 	enum CaptureError: Error {

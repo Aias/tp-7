@@ -125,6 +125,11 @@ final class DictationSession {
 		let text = (finalizedText + volatileText)
 			.trimmingCharacters(in: .whitespacesAndNewlines)
 		Log.d("dictation: finished, \(text.count) chars → \(audioURL.lastPathComponent)")
+		if capture.isSilent {
+			Notifier.postSilentMic()
+			inserter?.endUtterance()
+			return ""
+		}
 		let context = await context?.value
 		let cleaned = text.isEmpty ? text : await cleanup(text, context: context)
 		inserter?.endUtterance()
