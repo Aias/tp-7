@@ -3,9 +3,12 @@ import path from 'node:path';
 import type { Config } from './config.js';
 import { loadManifest, updateManifest, type ManifestEntry } from './manifest.js';
 import { listDevices, listFiles, pullFile, type RemoteFile } from './tp7.js';
+import { processWithPool } from './transcriber/concurrency.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
 
 const AUDIO_EXTENSIONS = new Set(['.wav', '.mp3']);
+
+const TRANSCRIBE_CONCURRENCY = 3;
 
 /** The device names recordings from its clock, which restarts at 1980-01-01 when unset. */
 const UNSET_CLOCK_PREFIX = '1980-';
@@ -113,8 +116,9 @@ async function pullNewFile(
 }
 
 /**
- * Transcribes every pulled recording, including ones a new pull adds while
- * this runs. A second run while one is in progress leaves the work to it.
+ * Transcribes every pulled recording, a few at a time, including ones a new
+ * pull adds while this runs. A second run while one is in progress leaves the
+ * work to it.
  */
 export async function transcribePulled(config: Config): Promise<TranscribeResult> {
 	const result: TranscribeResult = { transcribed: [], failed: [] };
@@ -129,33 +133,40 @@ export async function transcribePulled(config: Config): Promise<TranscribeResult
 	try {
 		const attempted = new Set<string>();
 		for (;;) {
-			const next = nextPulled(config.recordingsDir, attempted);
-			if (!next) {
+			const batch = pendingRecordings(config.recordingsDir, attempted);
+			if (batch.length === 0) {
 				return result;
 			}
-			const [name, entry] = next;
-			attempted.add(name);
-			try {
-				await transcribeRecording(config, name, entry.folder);
-				result.transcribed.push(name);
-			} catch (error) {
-				console.error(
-					`❌ Transcribing ${name} failed:`,
-					error instanceof Error ? error.message : error,
-				);
-				result.failed.push(name);
+			for (const [name] of batch) {
+				attempted.add(name);
 			}
+			await processWithPool(
+				batch,
+				async ([name, entry]) => {
+					try {
+						await transcribeRecording(config, name, entry.folder);
+						result.transcribed.push(name);
+					} catch (error) {
+						console.error(
+							`❌ Transcribing ${name} failed:`,
+							error instanceof Error ? error.message : error,
+						);
+						result.failed.push(name);
+					}
+				},
+				{ concurrency: TRANSCRIBE_CONCURRENCY },
+			);
 		}
 	} finally {
 		releaseLock();
 	}
 }
 
-function nextPulled(
+function pendingRecordings(
 	recordingsDir: string,
 	attempted: Set<string>,
-): [string, ManifestEntry] | undefined {
-	return Object.entries(loadManifest(recordingsDir).files).find(
+): [string, ManifestEntry][] {
+	return Object.entries(loadManifest(recordingsDir).files).filter(
 		([name, entry]) => entry.status === 'pulled' && !attempted.has(name),
 	);
 }

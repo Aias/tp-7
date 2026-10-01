@@ -35,12 +35,15 @@ export async function runTranscriptionOnly(options: TranscriptionOptions): Promi
 	const outputDir = options.outputDir || createOutputFolder(inputPath);
 	console.log(`📁 Output folder: ${outputDir}`);
 
+	const name = path.basename(inputPath);
 	emit({ event: 'stage', stage: 'converting', input: inputPath });
-	const audioPath = await timed('Conversion', () => convertToFlac(inputPath, outputDir));
+	const audioPath = await timed(`Conversion of ${name}`, () =>
+		convertToFlac(inputPath, outputDir),
+	);
 
 	// Transcribe and get sentences/paragraphs
 	emit({ event: 'stage', stage: 'transcribing', input: inputPath });
-	const result = await timed('Transcription', () => transcribe(audioPath, speakers));
+	const result = await timed(`Transcription of ${name}`, () => transcribe(audioPath, speakers));
 
 	// Save the complete output to JSON
 	const jsonPath = path.join(outputDir, 'transcript-raw.json');
@@ -56,16 +59,17 @@ export async function runTranscriptionOnly(options: TranscriptionOptions): Promi
  * starts as soon as the names are known and runs alongside the editing.
  */
 async function cleanAndSummarize(transcriptionOutput: TranscriptionResult, inputPath: string) {
+	const name = path.basename(inputPath);
 	emit({ event: 'stage', stage: 'cleaning', input: inputPath });
 	const knownSpeakers = await getKnownSpeakers();
-	const cleaning = timed('Cleaning', () => cleanTranscript(transcriptionOutput));
-	const reconciliation = timed('Speaker reconciliation', () =>
+	const cleaning = timed(`Cleaning of ${name}`, () => cleanTranscript(transcriptionOutput));
+	const reconciliation = timed(`Speaker reconciliation of ${name}`, () =>
 		refineSpeakerIdentification(transcriptionOutput.transcript, knownSpeakers),
 	);
 	const summary = reconciliation
 		.then((speakerMap) => {
 			emit({ event: 'stage', stage: 'summarizing', input: inputPath });
-			return timed('Summary', () =>
+			return timed(`Summary of ${name}`, () =>
 				summarizeAndTitle(
 					renderUtterances(transcriptionOutput.transcript, speakerMap),
 					MODELS.judgment,
