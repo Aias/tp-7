@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { emit } from '../events.js';
 import { createOutputFolder, timed, type SpeakerHint } from './utils.js';
 import { convertToFlac } from './audio.js';
 import { transcribe, type TranscriptionResult } from './transcription.js';
@@ -34,9 +35,11 @@ export async function runTranscriptionOnly(options: TranscriptionOptions): Promi
 	const outputDir = options.outputDir || createOutputFolder(inputPath);
 	console.log(`📁 Output folder: ${outputDir}`);
 
+	emit({ event: 'stage', stage: 'converting', input: inputPath });
 	const audioPath = await timed('Conversion', () => convertToFlac(inputPath, outputDir));
 
 	// Transcribe and get sentences/paragraphs
+	emit({ event: 'stage', stage: 'transcribing', input: inputPath });
 	const result = await timed('Transcription', () => transcribe(audioPath, speakers));
 
 	// Save the complete output to JSON
@@ -52,21 +55,23 @@ export async function runTranscriptionOnly(options: TranscriptionOptions): Promi
  * reads the transcript as AssemblyAI heard it, under the resolved names, so it
  * starts as soon as the names are known and runs alongside the editing.
  */
-async function cleanAndSummarize(transcriptionOutput: TranscriptionResult) {
+async function cleanAndSummarize(transcriptionOutput: TranscriptionResult, inputPath: string) {
+	emit({ event: 'stage', stage: 'cleaning', input: inputPath });
 	const knownSpeakers = await getKnownSpeakers();
 	const cleaning = timed('Cleaning', () => cleanTranscript(transcriptionOutput));
 	const reconciliation = timed('Speaker reconciliation', () =>
 		refineSpeakerIdentification(transcriptionOutput.transcript, knownSpeakers),
 	);
 	const summary = reconciliation
-		.then((speakerMap) =>
-			timed('Summary', () =>
+		.then((speakerMap) => {
+			emit({ event: 'stage', stage: 'summarizing', input: inputPath });
+			return timed('Summary', () =>
 				summarizeAndTitle(
 					renderUtterances(transcriptionOutput.transcript, speakerMap),
 					MODELS.judgment,
 				),
-			),
-		)
+			);
+		})
 		.catch((error: unknown) => {
 			console.error(
 				'\n⚠️  Summarization failed:',
@@ -93,6 +98,18 @@ export interface PipelineResult {
 
 const hasSpeech = ({ transcript }: TranscriptionResult) =>
 	Boolean(transcript.words?.length) || Boolean(transcript.text?.trim());
+
+const firstParagraph = (text: string) => text.split(/\n\s*\n/, 1)[0] ?? text;
+
+function reportResult(input: string, result: PipelineResult): PipelineResult {
+	emit({
+		event: 'result',
+		input,
+		...result,
+		summary: result.summary === null ? null : firstParagraph(result.summary),
+	});
+	return result;
+}
 
 function fileTranscript(
 	outputDir: string,
@@ -134,10 +151,16 @@ export async function runFullPipeline(options: TranscriptionOptions): Promise<Pi
 			'no-speech',
 			'## Transcript\n\nNo speech was detected in this recording.\n',
 		);
-		return { folder, transcript, title: null, summary: null, speech: false };
+		return reportResult(inputPath, {
+			folder,
+			transcript,
+			title: null,
+			summary: null,
+			speech: false,
+		});
 	}
 
-	const { cleanedText, summarized } = await cleanAndSummarize(transcriptionOutput);
+	const { cleanedText, summarized } = await cleanAndSummarize(transcriptionOutput, inputPath);
 
 	const { folder, transcript } = fileTranscript(
 		outputDir,
@@ -158,11 +181,11 @@ export async function runFullPipeline(options: TranscriptionOptions): Promise<Pi
 	}
 	console.log(cleanedText);
 
-	return {
+	return reportResult(inputPath, {
 		folder,
 		transcript,
 		title: summarized ? humanizeTitle(summarized.title) : null,
 		summary: summarized?.summary ?? null,
 		speech: true,
-	};
+	});
 }
