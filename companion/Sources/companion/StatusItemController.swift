@@ -61,9 +61,12 @@ extension PipelineEvent.Stage {
 }
 
 /// The menu is built once and its items are mutated in place — a rebuilt
-/// menu would leave the currently open instance stale.
+/// menu would leave the currently open instance stale. Only the Recent
+/// submenu's entries are replaced, each time it is about to open.
 @MainActor
-final class StatusItemController {
+final class StatusItemController: NSObject, NSMenuDelegate {
+	private static let recentCount = 8
+
 	private let statusItem: NSStatusItem
 	private let deviceItem = NSMenuItem(title: "TP-7", action: nil, keyEquivalent: "")
 	private let gestureItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -78,6 +81,7 @@ final class StatusItemController {
 		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 		ingestItem = NSMenuItem(title: "Ingest Now", action: nil, keyEquivalent: "i")
 		browseItem = NSMenuItem(title: "List Device Files", action: nil, keyEquivalent: "")
+		super.init()
 		let menu = NSMenu()
 		menu.autoenablesItems = false
 		deviceItem.isEnabled = false
@@ -97,6 +101,12 @@ final class StatusItemController {
 			keyEquivalent: "o")
 		open.target = self
 		menu.addItem(open)
+		let recentMenu = NSMenu()
+		recentMenu.autoenablesItems = false
+		recentMenu.delegate = self
+		let recent = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
+		recent.submenu = recentMenu
+		menu.addItem(recent)
 		menu.addItem(.separator())
 		menu.addItem(
 			NSMenuItem(
@@ -161,5 +171,28 @@ final class StatusItemController {
 
 	@objc private func openRecordings() {
 		NSWorkspace.shared.open(Paths.recordingsDir)
+	}
+
+	func menuNeedsUpdate(_ menu: NSMenu) {
+		menu.removeAllItems()
+		let transcripts = RecentTranscripts.latest(limit: Self.recentCount)
+		guard !transcripts.isEmpty else {
+			let empty = NSMenuItem(title: "No transcripts yet", action: nil, keyEquivalent: "")
+			empty.isEnabled = false
+			menu.addItem(empty)
+			return
+		}
+		for transcript in transcripts {
+			let item = NSMenuItem(
+				title: transcript.title, action: #selector(openTranscript(_:)), keyEquivalent: "")
+			item.target = self
+			item.representedObject = transcript.url
+			menu.addItem(item)
+		}
+	}
+
+	@objc private func openTranscript(_ sender: NSMenuItem) {
+		guard let url = sender.representedObject as? URL else { return }
+		NSWorkspace.shared.open(url)
 	}
 }
