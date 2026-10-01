@@ -28,7 +28,7 @@ enum Paths {
 
 	static let recordingsDir = FileManager.default
 		.homeDirectoryForCurrentUser
-		.appendingPathComponent("Music/recordings")
+		.appendingPathComponent("Recordings")
 
 	static let memosDir = recordingsDir.appendingPathComponent("memos")
 

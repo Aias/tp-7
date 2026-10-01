@@ -21,7 +21,7 @@ export type Config = z.infer<typeof ConfigSchema>;
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'tp7sync', 'config.json');
 
 const defaults: Config = {
-	recordingsDir: path.join(os.homedir(), 'Music', 'recordings'),
+	recordingsDir: path.join(os.homedir(), 'Recordings'),
 	tp7Bin: 'tp7',
 	deviceFolders: { '/recordings': 'meetings', '/memo': 'memos' },
 	minFileAgeSeconds: 120,

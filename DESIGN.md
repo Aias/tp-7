@@ -95,7 +95,7 @@ The wheel/rocker/side buttons stay free for a pluggable "control profiles" layer
 ## What already works (validated this session)
 
 - Patched tp7 CLI: audio→MTP switch, ls, pull at ~22 MB/s, return to audio mode — scripted, no device buttons.
-- Full ingest → AssemblyAI/OpenAI pipeline → dated folder grouping in `~/Music/recordings` (`bun run now|status|transcribe`).
+- Full ingest → AssemblyAI/OpenAI pipeline → dated folder grouping in `~/Recordings` (`bun run now|status|transcribe`).
 - Greet SysEx round-trip from the shell; identity parse; `mode:` polling (negative result: not a recording detector).
 - ffmpeg capture from the TP-7 as a CoreAudio input device.
 
@@ -111,13 +111,13 @@ The dock/undock mode flip is currently a one-toggle on-device step; the menu bar
 
 ## Dictation
 
-Memo hold (CC 27 press) starts capture from the TP-7 mic over USB; release ends it. Text streams to the cursor as live hypotheses — words appear immediately and may self-correct — via the pasteboard insertion path. Every dictation is also archived: audio to a memos area of `~/Music/recordings`, with the batch pipeline producing the durable transcript, so the archive copy's quality never depends on the live engine. No Mac-only dictation fallback (global hotkey / Mac mic without the TP-7): the TP-7 is the dictation device; this also keeps the Input Monitoring permission out of the app.
+Memo hold (CC 27 press) starts capture from the TP-7 mic over USB; release ends it. Text streams to the cursor as live hypotheses — words appear immediately and may self-correct — via the pasteboard insertion path. Every dictation is also archived: audio to a memos area of `~/Recordings`, with the batch pipeline producing the durable transcript, so the archive copy's quality never depends on the live engine. No Mac-only dictation fallback (global hotkey / Mac mic without the TP-7): the TP-7 is the dictation device; this also keeps the Input Monitoring permission out of the app.
 
 ## Gesture grammar
 
 Two axes, the same in every mode. **Memo is always your voice**: dictation to the cursor when idle, a spoken note pinned to the rolling transcript during a meeting. **The side buttons always ask the agent**: one taps out an "act" request, the other "research". A tap fires the request as-is; a memo hold within a few seconds of the tap attaches spoken words to it instead of going to the cursor. The verb comes from the side button, the words from memo, and the context from whatever is happening.
 
-A request writes a brief beside the recordings (`~/Music/recordings/agent/`) and opens an interactive Claude Code session in Ghostty with a prompt pointing at it, so the conversation stays visible and steerable. Idle, the brief carries the context stamp and the text selected in the frontmost app, which is what makes "select a passage, tap, speak" a selection-anchored annotation. In a meeting it carries the diarized live transcript so far, plus the markers and notes, so an agent can start on something five minutes into an hour-long call. The target project is never known at request time and no workspace is created automatically: the brief lists candidate repos and the session confirms with you before touching one.
+A request writes a brief beside the recordings (`~/Recordings/agent/`) and opens an interactive Claude Code session in Ghostty with a prompt pointing at it, so the conversation stays visible and steerable. Idle, the brief carries the context stamp and the text selected in the frontmost app, which is what makes "select a passage, tap, speak" a selection-anchored annotation. In a meeting it carries the diarized live transcript so far, plus the markers and notes, so an agent can start on something five minutes into an hour-long call. The target project is never known at request time and no workspace is created automatically: the brief lists candidate repos and the session confirms with you before touching one.
 
 ## Meetings
 
