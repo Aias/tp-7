@@ -7,12 +7,6 @@ import { runFullPipeline } from './transcriber/pipeline.js';
 
 const AUDIO_EXTENSIONS = new Set(['.wav', '.mp3']);
 
-/**
- * Recordings and their transcript folders share a filename prefix:
- * `2026-08-11_150648_000.wav` belongs to `2026-08-11_1506-<title>/`.
- */
-const GROUP_PREFIX_LENGTH = '2026-08-11_1506'.length;
-
 /** The device names recordings from its clock, which restarts at 1980-01-01 when unset. */
 const UNSET_CLOCK_PREFIX = '1980-';
 
@@ -167,51 +161,39 @@ function nextPulled(
 }
 
 async function transcribeRecording(config: Config, name: string, folder: string): Promise<void> {
-	const dir = path.join(config.recordingsDir, folder);
+	const inputPath = path.join(config.recordingsDir, folder, name);
 	console.log(`📝 Transcribing ${name}...`);
-	await runFullPipeline({ inputPath: path.join(dir, name) });
-	const group = groupRecording(dir, name);
+	const result = await runFullPipeline({ inputPath });
+	fs.renameSync(inputPath, path.join(result.folder, name));
 	updateManifest(config.recordingsDir, (manifest) => {
 		const entry = manifest.files[name];
 		if (entry) {
 			entry.status = 'transcribed';
-			entry.folder = group ? path.join(folder, group) : folder;
+			entry.folder = path.relative(config.recordingsDir, result.folder);
 		}
 	});
-	notify('TP-7 recording transcribed', group ?? name);
+	notify('TP-7 recording transcribed', path.basename(result.folder));
 }
 
 /**
- * Moves a pulled recording into the transcript folder the pipeline created for
- * it, so the raw audio, transcripts, and summary live together.
+ * The folder (relative to recordingsDir) already holding a recording, if any.
+ * A recording's transcript folder is the one beside it holding a file named
+ * for its stem, such as the `<stem>.16k.flac` the pipeline leaves behind.
  */
-function groupRecording(dir: string, fileName: string): string | null {
-	const folder = findGroupFolder(dir, fileName);
-	if (!folder) {
-		console.warn(`⚠️  No transcript folder found for ${fileName}; leaving it flat.`);
-		return null;
-	}
-	fs.renameSync(path.join(dir, fileName), path.join(dir, folder, fileName));
-	return folder;
-}
-
-function findGroupFolder(dir: string, fileName: string): string | null {
-	const prefix = fileName.slice(0, GROUP_PREFIX_LENGTH);
-	const matches = fs
-		.readdirSync(dir, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
-		.map((entry) => entry.name);
-	return matches.length === 1 ? (matches[0] ?? null) : null;
-}
-
-/** The folder (relative to recordingsDir) already holding a recording, if any. */
 function findLocal(recordingsDir: string, localFolder: string, fileName: string): string | null {
 	const dir = path.join(recordingsDir, localFolder);
-	if (fs.existsSync(path.join(dir, fileName))) {
+	const stem = path.parse(fileName).name;
+	if (fs.existsSync(path.join(dir, fileName)) || fs.existsSync(path.join(dir, `${stem}.flac`))) {
 		return localFolder;
 	}
-	const group = findGroupFolder(dir, fileName);
-	return group ? path.join(localFolder, group) : null;
+	const holder = fs
+		.readdirSync(dir, { withFileTypes: true })
+		.find(
+			(entry) =>
+				entry.isDirectory() &&
+				fs.readdirSync(path.join(dir, entry.name)).some((name) => name.startsWith(stem)),
+		);
+	return holder ? path.join(localFolder, holder.name) : null;
 }
 
 /** Parses the device's compact timestamps (`20260811T151458`, device-local time). */

@@ -44,6 +44,15 @@ export function humanizeTitle(title: string): string {
 	return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** `name`, or `name-2`, `name-3`, … when an earlier recording already took it. */
+function availablePath(parentDir: string, name: string): string {
+	let candidate = path.join(parentDir, name);
+	for (let suffix = 2; fs.existsSync(candidate); suffix++) {
+		candidate = path.join(parentDir, `${name}-${suffix}`);
+	}
+	return candidate;
+}
+
 export function renameOutputFolder(
 	currentPath: string,
 	title: string,
@@ -52,16 +61,9 @@ export function renameOutputFolder(
 	// Get date/time from filename or use current date
 	const dateTime = extractDateTimeFromFilename(originalFilename) ?? getCurrentDate();
 
-	// Create new folder name
-	const newFolderName = `${dateTime}-${title}`;
-	const parentDir = path.dirname(currentPath);
-	const newPath = path.join(parentDir, newFolderName);
-
-	// Rename the folder
-	if (currentPath !== newPath) {
-		fs.renameSync(currentPath, newPath);
-		console.log(`📁 Renamed output folder to: ${newFolderName}`);
-	}
+	const newPath = availablePath(path.dirname(currentPath), `${dateTime}-${title}`);
+	fs.renameSync(currentPath, newPath);
+	console.log(`📁 Renamed output folder to: ${path.basename(newPath)}`);
 
 	return newPath;
 }

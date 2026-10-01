@@ -5,7 +5,7 @@ import { convertToFlac } from './audio.js';
 import { transcribe, type TranscriptionResult } from './transcription.js';
 import { summarizeAndTitle } from './summarization.js';
 import { cleanTranscript, renderTranscript } from './cleaning.js';
-import { renameOutputFolder, getOutputFilenames } from './naming.js';
+import { renameOutputFolder, getOutputFilenames, humanizeTitle } from './naming.js';
 import {
 	refineSpeakerIdentification,
 	logSpeakerIdentification,
@@ -77,44 +77,77 @@ async function cleanAndSummarize(transcriptionOutput: TranscriptionResult) {
 
 	const [groups, speakerMap, summarized] = await Promise.all([cleaning, reconciliation, summary]);
 	logSpeakerIdentification(speakerMap);
-	return { transcript: renderTranscript(groups, speakerMap), summarized };
+	return { cleanedText: renderTranscript(groups, speakerMap), summarized };
+}
+
+export interface PipelineResult {
+	/** Absolute path of the recording's titled folder. */
+	folder: string;
+	/** Absolute path of the final transcript inside it. */
+	transcript: string;
+	/** Null when summarization failed. */
+	title: string | null;
+	summary: string | null;
+	speech: boolean;
+}
+
+function fileTranscript(
+	outputDir: string,
+	rawPath: string,
+	inputPath: string,
+	title: string,
+	markdown: string,
+) {
+	const folder = renameOutputFolder(outputDir, title, inputPath);
+	const filenames = getOutputFilenames(path.basename(folder));
+	const newRawPath = path.join(folder, filenames.raw);
+	fs.renameSync(path.join(folder, path.basename(rawPath)), newRawPath);
+	const transcript = path.join(folder, filenames.final);
+	fs.writeFileSync(transcript, markdown);
+	console.log(`\n📄 Raw transcript saved → ${newRawPath}`);
+	console.log(`📝 Transcript saved → ${transcript}`);
+	return { folder, transcript };
 }
 
 /**
  * Run the full pipeline: transcribe, edit, summarize, then file the transcript
  * and its raw JSON in a folder named for the recording's time and title.
  */
-export async function runFullPipeline(options: TranscriptionOptions): Promise<void> {
-	const { inputPath, speakers } = options;
+export async function runFullPipeline(options: TranscriptionOptions): Promise<PipelineResult> {
+	const { speakers } = options;
+	const inputPath = path.resolve(options.inputPath);
 
 	const { outputDir, transcriptionOutput, transcriptPath } = await runTranscriptionOnly({
 		inputPath,
 		speakers,
 	});
 
-	const { transcript, summarized } = await cleanAndSummarize(transcriptionOutput);
+	const { cleanedText, summarized } = await cleanAndSummarize(transcriptionOutput);
 
-	const folder = renameOutputFolder(outputDir, summarized?.title ?? 'untitled', inputPath);
-	const filenames = getOutputFilenames(path.basename(folder));
-	const rawPath = path.join(folder, filenames.raw);
-	fs.renameSync(path.join(folder, path.basename(transcriptPath)), rawPath);
-	const finalPath = path.join(folder, filenames.final);
-	fs.writeFileSync(
-		finalPath,
+	const { folder, transcript } = fileTranscript(
+		outputDir,
+		transcriptPath,
+		inputPath,
+		summarized?.title ?? 'untitled',
 		summarized
-			? `## Summary\n\n${summarized.summary}\n\n---\n\n## Transcript\n\n${transcript}\n`
-			: `## Transcript\n\n${transcript}\n`,
+			? `## Summary\n\n${summarized.summary}\n\n---\n\n## Transcript\n\n${cleanedText}\n`
+			: `## Transcript\n\n${cleanedText}\n`,
 	);
 
-	console.log(`\n📄 Raw transcript saved → ${rawPath}`);
-	console.log(`📝 Transcript saved → ${finalPath}`);
 	console.log('\n---\n');
 	if (summarized) {
 		console.log('## Summary\n\n' + summarized.summary + '\n');
 		console.log('---\n');
-		console.log(transcript);
 	} else {
 		console.log('## Transcript\n');
-		console.log(transcript);
 	}
+	console.log(cleanedText);
+
+	return {
+		folder,
+		transcript,
+		title: summarized ? humanizeTitle(summarized.title) : null,
+		summary: summarized?.summary ?? null,
+		speech: true,
+	};
 }
