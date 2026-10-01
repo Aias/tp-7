@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import type { Transcript } from 'assemblyai';
 import type { SpeakerProfile } from './transcription.config.types.js';
+import { formatTimestamp } from './utils.js';
 import { MODELS, openai } from './openai.js';
 
 export type SpeakerMap = Map<string, string>;
@@ -38,6 +39,39 @@ export function createSpeakerMap(transcript: Transcript): SpeakerMap {
 	}
 
 	return speakerMap;
+}
+
+/**
+ * utterance.speaker holds AssemblyAI's resolved value (a name when identified,
+ * else the bare diarization label). Recover the stable label for each one.
+ */
+function labelUtterances(transcript: Transcript): { label: string; start: number; text: string }[] {
+	const valueToLabel = new Map<string, string>();
+	const mapping = transcript.speech_understanding?.response?.speaker_identification?.mapping ?? {};
+	for (const [label, value] of Object.entries(mapping)) {
+		// Two labels resolving to the same name would otherwise collapse onto one
+		// another; keeping the first is at least stable.
+		if (!valueToLabel.has(value)) valueToLabel.set(value, label);
+	}
+
+	return (transcript.utterances ?? []).map((u) => ({
+		label: valueToLabel.get(u.speaker) ?? u.speaker,
+		start: u.start,
+		text: u.text.replace(/\[Speaker:[^\]]*\]\s*/gi, '').trim(),
+	}));
+}
+
+/** The transcript as AssemblyAI heard it, one block per utterance, under the reconciled names. */
+export function renderUtterances(transcript: Transcript, speakerMap: SpeakerMap): string {
+	const utterances = labelUtterances(transcript);
+	if (utterances.length === 0) return transcript.text ?? '';
+
+	return utterances
+		.map(
+			({ label, start, text }) =>
+				`[${formatTimestamp(start)}] **${formatSpeakerName(label, speakerMap)}**: ${text}`,
+		)
+		.join('\n\n');
 }
 
 const ReconciliationSchema = z.object({
@@ -98,22 +132,8 @@ export async function refineSpeakerIdentification(
 
 	const seed = createSpeakerMap(transcript);
 
-	// utterance.speaker holds AssemblyAI's resolved value (a name when identified,
-	// else the bare diarization label). Recover the stable label for each line.
-	const valueToLabel = new Map<string, string>();
-	const mapping = transcript.speech_understanding?.response?.speaker_identification?.mapping ?? {};
-	for (const [label, value] of Object.entries(mapping)) {
-		// Two labels resolving to the same name would otherwise collapse onto one
-		// another; keeping the first is at least stable.
-		if (!valueToLabel.has(value)) valueToLabel.set(value, label);
-	}
-
-	const transcriptText = utterances
-		.map((u) => {
-			const label = valueToLabel.get(u.speaker) ?? u.speaker;
-			const text = u.text.replace(/\[Speaker:[^\]]*\]\s*/gi, '').trim();
-			return `[Speaker ${label}]: ${text}`;
-		})
+	const transcriptText = labelUtterances(transcript)
+		.map(({ label, text }) => `[Speaker ${label}]: ${text}`)
 		.join('\n');
 
 	const audioMapping = seed.size

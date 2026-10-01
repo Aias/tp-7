@@ -25,6 +25,24 @@ export function formatTimestamp(ms: number): string {
 	return new Date(ms).toISOString().slice(11, 19);
 }
 
+export function formatElapsed(ms: number): string {
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	const remainingSeconds = seconds % 60;
+	return `${minutes}m ${remainingSeconds}s`;
+}
+
+/** Runs a pipeline stage and logs its duration, so a log shows where a run spends its time. */
+export async function timed<T>(stage: string, run: () => Promise<T>): Promise<T> {
+	const started = Date.now();
+	try {
+		return await run();
+	} finally {
+		console.log(`⏱️  ${stage}: ${formatElapsed(Date.now() - started)}`);
+	}
+}
+
 export function createOutputFolder(inputPath: string): string {
 	const dir = path.dirname(inputPath);
 	const baseName = path.basename(inputPath, path.extname(inputPath));
