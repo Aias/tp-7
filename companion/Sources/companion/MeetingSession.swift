@@ -297,51 +297,33 @@ final class MeetingSession {
 		Notifier.post(
 			title: "Meeting captured",
 			message: "Transcribing \(Self.hms(duration)) of audio…")
-		await Self.process(stamp: stamp)
+		await Self.process(stamp: stamp, duration: duration)
 	}
 
 	/// Mixes a finished capture's tracks, runs the batch transcription
-	/// pipeline, and groups everything into the pipeline's titled folder.
-	/// Shared by the live Stop path and the launch-time recovery sweep.
-	static func process(stamp: String) async {
+	/// pipeline, and groups everything into the folder it reports. Shared
+	/// by the live Stop path and the launch-time recovery sweep.
+	static func process(stamp: String, duration: TimeInterval) async {
 		let input = await mixTracks(stamp: stamp)
+		var finished: PipelineResult?
 		let ok = await Subprocess.runLogged(
 			["bun", "src/cli.ts", "transcribe", input.path],
-			currentDirectory: Paths.repoRoot)
-		guard ok else {
+			currentDirectory: Paths.repoRoot
+		) { event in
+			guard case .result(let result) = event else { return }
+			finished = result
+			Notifier.announce(result, silence: "No words in \(hms(duration)) of audio.")
+		}
+		guard let finished else {
 			Notifier.post(
 				title: "Meeting transcription failed",
 				message: "Raw tracks are in meetings/; see tp7companion.log")
 			return
 		}
-		guard let folder = groupArtifacts(stamp: stamp) else {
-			Notifier.post(title: "Meeting transcribed", message: stamp)
-			return
+		if !ok {
+			Log.d("meeting: pipeline failed after reporting a result for \(stamp)")
 		}
-		let transcript = folder.appendingPathComponent("\(folder.lastPathComponent)-transcript.md")
-		Notifier.post(
-			title: title(of: folder), message: summaryLead(of: transcript), opening: transcript)
-	}
-
-	/// The pipeline's folder is `YYYY-MM-DD_HHMM-<kebab-title>`.
-	private static func title(of folder: URL) -> String {
-		let slug = folder.lastPathComponent.dropFirst("yyyy-MM-dd_HHmm-".count)
-		let words = slug.replacingOccurrences(of: "-", with: " ")
-		return words.prefix(1).uppercased() + words.dropFirst()
-	}
-
-	/// The first paragraph of the transcript file's summary section.
-	private static func summaryLead(of transcript: URL) -> String {
-		guard let text = try? String(contentsOf: transcript, encoding: .utf8),
-			text.hasPrefix("## Summary")
-		else {
-			return "Transcript ready."
-		}
-		let body = text.replacingOccurrences(of: "## Summary", with: "")
-		let paragraph = body.components(separatedBy: "\n\n")
-			.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-			.first { !$0.isEmpty } ?? "Transcript ready."
-		return paragraph.count > 240 ? String(paragraph.prefix(237)) + "…" : paragraph
+		groupArtifacts(stamp: stamp, into: finished.folder)
 	}
 
 	/// Captures the companion never finished processing — a quit or crash
@@ -359,7 +341,9 @@ final class MeetingSession {
 			let name = url.lastPathComponent
 			guard name.hasSuffix("_meeting.wav") else { continue }
 			let stamp = String(name.dropLast("_meeting.wav".count))
-			if titledFolder(for: stamp) != nil, !manager.fileExists(atPath: micURL(for: stamp).path) {
+			if recoveredFolder(for: stamp) != nil,
+				!manager.fileExists(atPath: micURL(for: stamp).path)
+			{
 				try? manager.removeItem(at: url)
 			}
 		}
@@ -369,8 +353,8 @@ final class MeetingSession {
 			.sorted()
 		for stamp in stamps {
 			// Transcribed but never grouped: just finish the grouping.
-			if titledFolder(for: stamp) != nil {
-				_ = groupArtifacts(stamp: stamp)
+			if let folder = recoveredFolder(for: stamp) {
+				groupArtifacts(stamp: stamp, into: folder)
 				continue
 			}
 			// An interrupted capture's WAV header was never finalized;
@@ -390,7 +374,7 @@ final class MeetingSession {
 			Notifier.post(
 				title: "Recovering interrupted meeting",
 				message: "Transcribing \(hms(duration)) from \(stamp)…")
-			await process(stamp: stamp)
+			await process(stamp: stamp, duration: duration)
 		}
 	}
 
@@ -471,26 +455,27 @@ final class MeetingSession {
 		try? content.write(to: liveURL, atomically: true, encoding: .utf8)
 	}
 
-	/// The pipeline names its output folder `YYYY-MM-DD_HHMM-<title>` from
-	/// the input filename.
-	private static func titledFolder(for stamp: String) -> URL? {
-		let prefix = String(stamp.prefix("yyyy-MM-dd_HHmm".count))
-		let entries = try? FileManager.default.contentsOfDirectory(
+	/// Crash recovery only, for a capture whose pipeline result was lost: its
+	/// folder is the directory beside the tracks holding a file named for
+	/// the capture, such as the `<stem>.16k.flac` the pipeline leaves there.
+	/// A run that just finished uses the folder it reported instead.
+	private static func recoveredFolder(for stamp: String) -> URL? {
+		let manager = FileManager.default
+		let stem = "\(stamp)_meeting"
+		let entries = try? manager.contentsOfDirectory(
 			at: Paths.meetingsDir, includingPropertiesForKeys: [.isDirectoryKey])
 		return entries?.first { url in
-			url.hasDirectoryPath && url.lastPathComponent.hasPrefix(prefix)
+			url.hasDirectoryPath
+				&& ((try? manager.contentsOfDirectory(atPath: url.path)) ?? [])
+					.contains { $0.hasPrefix(stem) }
 		}
 	}
 
 	/// Moves the raw tracks, markers, and context into the pipeline's
-	/// titled folder. The mix is derived (regenerated on demand), so it's
-	/// dropped rather than kept.
-	private static func groupArtifacts(stamp: String) -> URL? {
+	/// folder. The mix is derived (regenerated on demand), so it's dropped
+	/// rather than kept.
+	private static func groupArtifacts(stamp: String, into folder: URL) {
 		try? FileManager.default.removeItem(at: mixedURL(for: stamp))
-		guard let folder = titledFolder(for: stamp) else {
-			Log.d("meeting: no pipeline folder for \(stamp), leaving tracks flat")
-			return nil
-		}
 		let manager = FileManager.default
 		let artifacts = [
 			micURL(for: stamp), systemURL(for: stamp), markersURL(for: stamp),
@@ -500,7 +485,6 @@ final class MeetingSession {
 			try? manager.moveItem(
 				at: url, to: folder.appendingPathComponent(url.lastPathComponent))
 		}
-		return folder
 	}
 
 	private static func hms(_ seconds: TimeInterval) -> String {

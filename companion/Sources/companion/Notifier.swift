@@ -19,7 +19,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 		}
 	}
 
-	static func post(title: String, message: String, opening url: URL? = nil) {
+	/// A notification posted again under the same identifier replaces the
+	/// one already shown.
+	static func post(
+		title: String, message: String, opening url: URL? = nil, identifier: String? = nil
+	) {
 		guard bundled else {
 			Task {
 				let script =
@@ -35,8 +39,37 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 			content.userInfo = ["url": url.absoluteString]
 		}
 		let request = UNNotificationRequest(
-			identifier: UUID().uuidString, content: content, trigger: nil)
+			identifier: identifier ?? UUID().uuidString, content: content, trigger: nil)
 		UNUserNotificationCenter.current().add(request)
+	}
+
+	/// Announces a finished recording with its title and the summary's lead,
+	/// opening the transcript on click. A recording with no speech opens its
+	/// folder instead, which may hold no transcript.
+	static func announce(
+		_ result: PipelineResult, silence: String, identifier: String? = nil
+	) {
+		guard result.speech else {
+			post(
+				title: "No speech captured", message: silence, opening: result.folder,
+				identifier: identifier)
+			return
+		}
+		let title =
+			result.title ?? TranscriptFolder(name: result.folder.lastPathComponent)?.title
+			?? "Transcript ready"
+		post(
+			title: title, message: lead(of: result.summary) ?? "Transcript ready.",
+			opening: result.transcript, identifier: identifier)
+	}
+
+	/// The first paragraph of a summary, short enough for a notification.
+	static func lead(of summary: String?) -> String? {
+		let paragraph = summary?.components(separatedBy: "\n\n")
+			.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+			.first { !$0.isEmpty }
+		guard let paragraph else { return nil }
+		return paragraph.count > 240 ? String(paragraph.prefix(237)) + "…" : paragraph
 	}
 
 	nonisolated func userNotificationCenter(
