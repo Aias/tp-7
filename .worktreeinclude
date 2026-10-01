@@ -1,0 +1,2 @@
+src/transcriber/.env
+src/transcriber/transcription.config.local.ts
