@@ -8,11 +8,9 @@ import {
 import { formatTimestamp, type SpeakerHint } from './utils.js';
 import {
 	getCustomSpellings,
-	getKeyTerms,
-	getKnownSpeakers,
 	getTranscriptionOptions,
+	getVocabulary,
 } from './transcription.config.loader.js';
-import type { SpeakerIdentificationOptions } from './transcription.config.types.js';
 
 const assemblyai = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY! });
 
@@ -42,10 +40,9 @@ export async function transcribe(
 	}
 
 	// Load config values
-	const [customSpellings, keyTerms, knownSpeakers, transcriptionOptions] = await Promise.all([
+	const [customSpellings, keyTerms, transcriptionOptions] = await Promise.all([
 		getCustomSpellings(),
-		getKeyTerms(),
-		getKnownSpeakers(),
+		getVocabulary(),
 		getTranscriptionOptions(),
 	]);
 
@@ -68,16 +65,6 @@ export async function transcribe(
 			min_speakers_expected: speakers.min,
 			max_speakers_expected: speakers.max,
 		};
-	}
-	// Give the audio-based identification the same roster the transcript-based
-	// reconciliation gets. Telling voices apart is what it can do that text cannot.
-	const identification = transcriptionOptions.speech_understanding?.request?.speaker_identification;
-	if (identification && knownSpeakers.length > 0) {
-		const withRoster: SpeakerIdentificationOptions = {
-			...identification,
-			speakers: knownSpeakers,
-		};
-		params.speech_understanding = { request: { speaker_identification: withRoster } };
 	}
 	// Only send enrichment fields when populated. Empty arrays add nothing, and
 	// AssemblyAI rejects keyterms_prompt_options without a keyterms_prompt.

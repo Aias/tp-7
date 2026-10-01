@@ -24,7 +24,7 @@ import type { TranscriptionConfig } from './transcription.config.types.js';
  *     { from: ["api", "API", "a p i"], to: "API" },
  *   ],
  *
- *   // People you record with. A description gives both identification passes a
+ *   // People you record with. A description gives the reconciliation pass a
  *   // role to match against, which is the only way to name a speaker who is
  *   // never addressed by name in the audio. Make it discriminating.
  *   knownSpeakers: [
@@ -75,7 +75,7 @@ export const defaultConfig: TranscriptionConfig = {
 		speaker_labels: true, // Identify different speakers
 		// Resolve diarized speakers (A, B, C) to real names inferred from the
 		// conversation itself (self-introductions, direct address). Requires
-		// speaker_labels. `transcribe` supplies the roster from knownSpeakers.
+		// speaker_labels.
 		// Medium effort is the level documented for conference-room audio,
 		// crosstalk, and recordings past ten minutes; it costs more per hour.
 		speech_understanding: {
