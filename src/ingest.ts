@@ -1,17 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from './config.js';
+import { emit } from './events.js';
 import { loadManifest, updateManifest, type ManifestEntry } from './manifest.js';
 import { listDevices, listFiles, pullFile, type RemoteFile } from './tp7.js';
+import { archiveAsFlac } from './transcriber/audio.js';
+import { processWithPool } from './transcriber/concurrency.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
 
 const AUDIO_EXTENSIONS = new Set(['.wav', '.mp3']);
 
-/**
- * Recordings and their transcript folders share a filename prefix:
- * `2026-08-11_150648_000.wav` belongs to `2026-08-11_1506-<title>/`.
- */
-const GROUP_PREFIX_LENGTH = '2026-08-11_1506'.length;
+const TRANSCRIBE_CONCURRENCY = 3;
 
 /** The device names recordings from its clock, which restarts at 1980-01-01 when unset. */
 const UNSET_CLOCK_PREFIX = '1980-';
@@ -61,7 +60,9 @@ export async function pull(config: Config): Promise<PullResult> {
 	const misdated = result.pulled.filter((name) => name.startsWith(UNSET_CLOCK_PREFIX));
 	if (misdated.length > 0) {
 		console.warn(`⚠️  TP-7 clock is unset: ${misdated.join(', ')}`);
-		notify('TP-7 clock is unset', misdated.join(', '));
+		for (const file of misdated) {
+			emit({ event: 'misdated', file });
+		}
 	}
 	return result;
 }
@@ -119,8 +120,9 @@ async function pullNewFile(
 }
 
 /**
- * Transcribes every pulled recording, including ones a new pull adds while
- * this runs. A second run while one is in progress leaves the work to it.
+ * Transcribes every pulled recording, a few at a time, including ones a new
+ * pull adds while this runs. A second run while one is in progress leaves the
+ * work to it.
  */
 export async function transcribePulled(config: Config): Promise<TranscribeResult> {
 	const result: TranscribeResult = { transcribed: [], failed: [] };
@@ -135,83 +137,104 @@ export async function transcribePulled(config: Config): Promise<TranscribeResult
 	try {
 		const attempted = new Set<string>();
 		for (;;) {
-			const next = nextPulled(config.recordingsDir, attempted);
-			if (!next) {
+			const batch = pendingRecordings(config.recordingsDir, attempted);
+			if (batch.length === 0) {
 				return result;
 			}
-			const [name, entry] = next;
-			attempted.add(name);
-			try {
-				await transcribeRecording(config, name, entry.folder);
-				result.transcribed.push(name);
-			} catch (error) {
-				console.error(
-					`❌ Transcribing ${name} failed:`,
-					error instanceof Error ? error.message : error,
-				);
-				result.failed.push(name);
+			for (const [name] of batch) {
+				attempted.add(name);
 			}
+			await processWithPool(
+				batch,
+				async ([name, entry]) => {
+					try {
+						await transcribeRecording(config, name, entry.folder);
+						result.transcribed.push(name);
+					} catch (error) {
+						console.error(
+							`❌ Transcribing ${name} failed:`,
+							error instanceof Error ? error.message : error,
+						);
+						result.failed.push(name);
+					}
+				},
+				{ concurrency: TRANSCRIBE_CONCURRENCY },
+			);
 		}
 	} finally {
 		releaseLock();
 	}
 }
 
-function nextPulled(
+function pendingRecordings(
 	recordingsDir: string,
 	attempted: Set<string>,
-): [string, ManifestEntry] | undefined {
-	return Object.entries(loadManifest(recordingsDir).files).find(
+): [string, ManifestEntry][] {
+	return Object.entries(loadManifest(recordingsDir).files).filter(
 		([name, entry]) => entry.status === 'pulled' && !attempted.has(name),
 	);
 }
 
 async function transcribeRecording(config: Config, name: string, folder: string): Promise<void> {
-	const dir = path.join(config.recordingsDir, folder);
+	const inputPath = path.join(config.recordingsDir, folder, name);
 	console.log(`📝 Transcribing ${name}...`);
-	await runFullPipeline({ inputPath: path.join(dir, name) });
-	const group = groupRecording(dir, name);
+	const result = await runFullPipeline({
+		inputPath,
+		getStartedAt: () => loadManifest(config.recordingsDir).files[name]?.startedAt,
+	});
+	const filed = path.join(result.folder, name);
+	fs.renameSync(inputPath, filed);
 	updateManifest(config.recordingsDir, (manifest) => {
 		const entry = manifest.files[name];
 		if (entry) {
 			entry.status = 'transcribed';
-			entry.folder = group ? path.join(folder, group) : folder;
+			entry.folder = path.relative(config.recordingsDir, result.folder);
 		}
 	});
-	notify('TP-7 recording transcribed', group ?? name);
+	await archiveRecording(filed);
 }
 
 /**
- * Moves a pulled recording into the transcript folder the pipeline created for
- * it, so the raw audio, transcripts, and summary live together.
+ * Replaces a filed WAV with a FLAC. The transcript is already done by then, so
+ * a failed conversion keeps the WAV, which is still a complete recording.
  */
-function groupRecording(dir: string, fileName: string): string | null {
-	const folder = findGroupFolder(dir, fileName);
-	if (!folder) {
-		console.warn(`⚠️  No transcript folder found for ${fileName}; leaving it flat.`);
-		return null;
+async function archiveRecording(filed: string): Promise<void> {
+	if (path.extname(filed).toLowerCase() !== '.wav') {
+		return;
 	}
-	fs.renameSync(path.join(dir, fileName), path.join(dir, folder, fileName));
-	return folder;
+	try {
+		const wavSize = fs.statSync(filed).size;
+		const flacPath = await archiveAsFlac(filed);
+		console.log(
+			`📦 Archived ${path.basename(flacPath)} (${formatSize(wavSize)} → ${formatSize(fs.statSync(flacPath).size)})`,
+		);
+	} catch (error) {
+		console.warn(
+			`⚠️  Keeping ${path.basename(filed)} as WAV:`,
+			error instanceof Error ? error.message : error,
+		);
+	}
 }
 
-function findGroupFolder(dir: string, fileName: string): string | null {
-	const prefix = fileName.slice(0, GROUP_PREFIX_LENGTH);
-	const matches = fs
-		.readdirSync(dir, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
-		.map((entry) => entry.name);
-	return matches.length === 1 ? (matches[0] ?? null) : null;
-}
-
-/** The folder (relative to recordingsDir) already holding a recording, if any. */
+/**
+ * The folder (relative to recordingsDir) already holding a recording, if any.
+ * A recording's transcript folder is the one beside it holding a file named
+ * for its stem, such as the `<stem>.16k.flac` the pipeline leaves behind.
+ */
 function findLocal(recordingsDir: string, localFolder: string, fileName: string): string | null {
 	const dir = path.join(recordingsDir, localFolder);
-	if (fs.existsSync(path.join(dir, fileName))) {
+	const stem = path.parse(fileName).name;
+	if (fs.existsSync(path.join(dir, fileName)) || fs.existsSync(path.join(dir, `${stem}.flac`))) {
 		return localFolder;
 	}
-	const group = findGroupFolder(dir, fileName);
-	return group ? path.join(localFolder, group) : null;
+	const holder = fs
+		.readdirSync(dir, { withFileTypes: true })
+		.find(
+			(entry) =>
+				entry.isDirectory() &&
+				fs.readdirSync(path.join(dir, entry.name)).some((name) => name.startsWith(stem)),
+		);
+	return holder ? path.join(localFolder, holder.name) : null;
 }
 
 /** Parses the device's compact timestamps (`20260811T151458`, device-local time). */
@@ -256,14 +279,6 @@ function isProcessAlive(pid: number): boolean {
 	} catch {
 		return false;
 	}
-}
-
-function notify(title: string, message: string): void {
-	Bun.spawnSync([
-		'osascript',
-		'-e',
-		`display notification ${JSON.stringify(message)} with title ${JSON.stringify(title)}`,
-	]);
 }
 
 function formatSize(bytes: number): string {

@@ -1,6 +1,6 @@
 # tp7sync
 
-Pulls recordings off a teenage engineering TP-7 field recorder, transcribes them, and files everything into `~/Recordings` — one folder per recording, holding the raw WAV, diarized transcripts, and an AI summary.
+Pulls recordings off a teenage engineering TP-7 field recorder, transcribes them, and files everything into `~/Recordings` — one folder per recording, holding the audio, diarized transcripts, and an AI summary.
 
 ## How it works
 
@@ -15,9 +15,9 @@ On top of that, tp7sync runs the ingest loop:
 
 1. Detect the TP-7 on USB (cheap; does not disturb audio mode).
 2. List `/recordings` and `/memo` on the device, diff against the manifest at `~/Recordings/.tp7sync/manifest.json`.
-3. Pull each new file into `~/Recordings/meetings` (from `/recordings`) or `~/Recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset, and ingest posts a notification naming it.
-4. Run the transcription pipeline (AssemblyAI diarization → speaker identification → clean-verbatim editing → summary → AI-generated title) over each pulled file, which produces a `YYYY-MM-DD_HHMM-title/` folder beside it. Pulled files that fail to transcribe are retried on the next run.
-5. Move the WAV into that folder and post a macOS notification.
+3. Pull each new file into `~/Recordings/meetings` (from `/recordings`) or `~/Recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset: pull emits a `misdated` event for it, and `redate` records the right start time.
+4. Run the transcription pipeline (AssemblyAI diarization → speaker identification and clean-verbatim editing → summary and title) over each pulled file, up to three at once, which produces a `YYYY-MM-DD_HHMM-title/` folder beside it. Pulled files that fail to transcribe are retried on the next run.
+5. Move the WAV into that folder and replace it with a lossless FLAC once the FLAC's duration matches. The manifest keeps the device file name.
 
 Recordings already present locally are recorded as `preexisting` and never re-pulled. Device files are never deleted.
 
@@ -40,11 +40,17 @@ Optional settings overrides go in `~/.config/tp7sync/config.json`; see `src/conf
 bun run now         # ingest new recordings once
 bun run status      # device presence + manifest summary
 bun run transcribe <file> [speakers]   # transcribe any local audio file (speakers: 3 or 2-5)
+bun src/cli.ts redate <file> <when>    # correct a recording's start ("YYYY-MM-DD HH:MM", or "HH:MM" for today)
+bun src/cli.ts draft-summary <live-transcript.md>   # summarize a live transcript on the fast model
 ```
+
+## Event lines
+
+Commands the companion runs print machine-readable lines among their log output: the prefix `@tp7 ` followed by one JSON object. `transcribe` and `transcribe-pulled` emit `stage` and `result` for each recording, `pull` emits `misdated`, `draft-summary` emits `draft`, and `redate` emits `redated`. `src/events.ts` defines the fields.
 
 ## Companion app
 
-`companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. The side buttons hand the moment to Claude Code: a tap writes a brief (current selection and window, or the meeting transcript so far) and opens an interactive session in Ghostty; a memo hold right after the tap adds spoken instructions. Docking the TP-7 ingests once, as soon as no capture or other app is using its audio, and the menu's Ingest Now runs the same ingest on demand. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
+`companion/` is a Swift menu-bar app that layers live features over the same archive: device presence, ctrl-mode gesture handling, memo-hold dictation streamed to the cursor, and gesture-driven meeting capture — Rec arms, Play starts and toggles pause, Stop ends and hands the audio to the transcription pipeline, with the TP-7 mic and Mac system audio kept as separate tracks and +/− dropping timestamped markers. The side buttons hand the moment to Claude Code: a tap writes a brief (current selection and window, or the meeting transcript so far) and opens an interactive session in Ghostty; a memo hold right after the tap adds spoken instructions. Docking the TP-7 ingests once, as soon as no capture or other app is using its audio, and the menu's Ingest Now runs the same ingest on demand. At Stop, a draft summary of the live transcript arrives within seconds and the final summary replaces it when the pipeline finishes; the menu shows the pipeline's current stage and lists recent transcripts, and the notification for a recording dated 1980 takes its real start time as a reply. Build and run with `swift run` from `companion/`; the architecture and the device's verified control map live in `DESIGN.md`.
 
 To install it as a real app:
 

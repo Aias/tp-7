@@ -1,44 +1,5 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import { MODELS, openai } from './openai.js';
-
-const TITLE_PROMPT = `Based on this summary, generate a 3-5 word descriptive title for the meeting/call.
-
-Rules:
-- Use lowercase with hyphens between words
-- Focus on the main topic or purpose
-- Avoid generic terms like "meeting", "call", "discussion"
-- Be specific about the subject matter
-- Output ONLY the title, no explanation
-
-Summary:
-{summary}`;
-
-export async function generateTitle(summary: string): Promise<string> {
-	try {
-		const response = await openai.chat.completions.create({
-			model: MODELS.mechanical,
-			reasoning_effort: 'none',
-			service_tier: 'fast',
-			messages: [
-				{
-					role: 'user',
-					content: TITLE_PROMPT.replace('{summary}', summary),
-				},
-			],
-		});
-
-		const title = response.choices[0]?.message.content?.trim() ?? 'untitled';
-		// Ensure it's lowercase and hyphenated
-		return title
-			.toLowerCase()
-			.replace(/\s+/g, '-')
-			.replace(/[^a-z0-9-]/g, '');
-	} catch (error) {
-		console.error('Error generating title:', error);
-		return 'untitled';
-	}
-}
 
 export function extractDateTimeFromFilename(filename: string): string | null {
 	// Extract date and time (hours + minutes only) from filename patterns like:
@@ -77,28 +38,40 @@ export function getCurrentDate(): string {
 	return `${year}-${month}-${day}`;
 }
 
-export async function renameOutputFolder(
-	currentPath: string,
-	summary: string,
-	originalFilename: string,
-): Promise<string> {
-	// Get date/time from filename or use current date
-	const dateTime = extractDateTimeFromFilename(originalFilename) ?? getCurrentDate();
+/** The folder title as a person would write it: "virtual-try-on" becomes "Virtual try on". */
+export function humanizeTitle(title: string): string {
+	const text = title.replace(/-/g, ' ');
+	return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
-	// Generate descriptive title
-	console.log('🏷️  Generating descriptive title...');
-	const title = await generateTitle(summary);
+/** `YYYY-MM-DDTHH:MM` as the `YYYY-MM-DD_HHMM` that starts a folder name. */
+export function formatFolderPrefix(startedAt: string): string {
+	return startedAt.replace('T', '_').replace(':', '');
+}
 
-	// Create new folder name
-	const newFolderName = `${dateTime}-${title}`;
-	const parentDir = path.dirname(currentPath);
-	const newPath = path.join(parentDir, newFolderName);
-
-	// Rename the folder
-	if (currentPath !== newPath) {
-		fs.renameSync(currentPath, newPath);
-		console.log(`📁 Renamed output folder to: ${newFolderName}`);
+/** `name`, or `name-2`, `name-3`, … when an earlier recording already took it. */
+export function availablePath(parentDir: string, name: string): string {
+	let candidate = path.join(parentDir, name);
+	for (let suffix = 2; fs.existsSync(candidate); suffix++) {
+		candidate = path.join(parentDir, `${name}-${suffix}`);
 	}
+	return candidate;
+}
+
+export function renameOutputFolder(
+	currentPath: string,
+	title: string,
+	originalFilename: string,
+	startedAt?: string,
+): string {
+	// A corrected start wins over the filename, whose clock may be unset
+	const dateTime = startedAt
+		? formatFolderPrefix(startedAt)
+		: (extractDateTimeFromFilename(originalFilename) ?? getCurrentDate());
+
+	const newPath = availablePath(path.dirname(currentPath), `${dateTime}-${title}`);
+	fs.renameSync(currentPath, newPath);
+	console.log(`📁 Renamed output folder to: ${path.basename(newPath)}`);
 
 	return newPath;
 }

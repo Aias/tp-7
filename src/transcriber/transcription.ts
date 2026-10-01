@@ -5,7 +5,7 @@ import {
 	type Transcript,
 	type TranscribeParams,
 } from 'assemblyai';
-import { formatTimestamp, type SpeakerHint } from './utils.js';
+import { formatElapsed, formatTimestamp, type SpeakerHint } from './utils.js';
 import {
 	getCustomSpellings,
 	getTranscriptionOptions,
@@ -13,14 +13,6 @@ import {
 } from './transcription.config.loader.js';
 
 const assemblyai = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY! });
-
-function formatElapsed(ms: number): string {
-	const seconds = Math.floor(ms / 1000);
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	const remainingSeconds = seconds % 60;
-	return `${minutes}m ${remainingSeconds}s`;
-}
 
 export interface TranscriptionResult {
 	transcript: Transcript;

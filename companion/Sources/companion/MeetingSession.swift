@@ -22,6 +22,8 @@ final class MeetingSession {
 	private static let sampleRate = 48_000.0
 	/// Captures shorter than this are button tests, not meetings, and are deleted.
 	private static let minTranscribeSeconds = 5.0
+	/// How far an archived FLAC's duration may differ from its WAV's.
+	private static let flacDurationTolerance = 0.1
 
 	private let capture = AudioCapture()
 	private let systemAudio = SystemAudioCapture()
@@ -95,9 +97,20 @@ final class MeetingSession {
 		Log.d("meeting: disarmed \(stamp)")
 	}
 
+	/// A live mic rises above the silence floor well within this long.
+	private static let silenceCheckSeconds = 5.0
+	private var capturingMacMic = false
+
+	/// The system-audio track is never judged: silence there is normal for
+	/// an in-person meeting.
+	private func warnIfMicSilent() {
+		guard micFile != nil, capture.isSilent else { return }
+		Log.d("meeting: mic silent \(Int(Self.silenceCheckSeconds)) s into recording")
+		Notifier.postSilentMic(macMicrophone: capturingMacMic)
+	}
+
 	func start() async throws {
 		guard !cancelled else { return }
-		let context = await CaptureContext.current()
 		// The TP-7 mic when wired; over BLE (gestures only, no audio path)
 		// the Mac's default input keeps the room track alive.
 		let device: AudioDeviceID
@@ -105,6 +118,7 @@ final class MeetingSession {
 			device = tp7
 		} else if let fallback = AudioCapture.defaultInputDevice() {
 			device = fallback
+			capturingMacMic = true
 			Log.d("meeting: TP-7 not on USB, capturing the default input device")
 			Notifier.post(
 				title: "Recording with the Mac microphone",
@@ -120,7 +134,6 @@ final class MeetingSession {
 		}
 		try FileManager.default.createDirectory(
 			at: Paths.meetingsDir, withIntermediateDirectories: true)
-		writeContext(context)
 		micFile = try AVAudioFile(
 			forWriting: micURL,
 			settings: [
@@ -141,6 +154,9 @@ final class MeetingSession {
 			self.micFramesWritten += AVAudioFramePosition(buffer.frameLength)
 			self.liveTranscriber.feedMic(buffer)
 		}
+		// The context query reads accessibility and sometimes runs git, so it
+		// gathers while system audio starts rather than ahead of the mic.
+		let context = Task { await CaptureContext.current() }
 		// System audio is best-effort: a missing Screen Recording permission
 		// degrades to mic-only capture rather than blocking the meeting.
 		do {
@@ -167,6 +183,7 @@ final class MeetingSession {
 				title: "Meeting is mic-only",
 				message: "System audio needs the Screen Recording permission.")
 		}
+		let captureContext = await context.value
 		// Stop/Rec/unplug may have disarmed while system audio was starting.
 		if cancelled {
 			Log.d("meeting: start cancelled, discarding \(stamp)")
@@ -177,11 +194,15 @@ final class MeetingSession {
 			systemFile = nil
 			try? FileManager.default.removeItem(at: micURL)
 			try? FileManager.default.removeItem(at: systemURL)
-			try? FileManager.default.removeItem(at: contextURL)
 			return
 		}
+		writeContext(captureContext)
 		phase = .recording
 		Log.d("meeting: recording → \(micURL.lastPathComponent)")
+		Task { [weak self] in
+			try? await Task.sleep(for: .seconds(Self.silenceCheckSeconds))
+			self?.warnIfMicSilent()
+		}
 	}
 
 	func pause() {
@@ -255,7 +276,7 @@ final class MeetingSession {
 
 	/// Stops both tracks, mixes them, and runs the batch transcription
 	/// pipeline; artifacts group into the pipeline's titled folder.
-	func finish() async {
+	func finish(onStage: StageReport) async {
 		let duration = elapsed
 		noteEnded()
 		capture.stop()
@@ -274,61 +295,85 @@ final class MeetingSession {
 			return
 		}
 		writeMarkers()
-		writeLiveTranscript()
+		let hasLiveTranscript = writeLiveTranscript()
 		Notifier.post(
 			title: "Meeting captured",
 			message: "Transcribing \(Self.hms(duration)) of audio…")
-		await Self.process(stamp: stamp)
+		await Self.process(
+			stamp: stamp, duration: duration, draftFrom: hasLiveTranscript ? liveURL : nil,
+			onStage: onStage)
 	}
 
 	/// Mixes a finished capture's tracks, runs the batch transcription
-	/// pipeline, and groups everything into the pipeline's titled folder.
-	/// Shared by the live Stop path and the launch-time recovery sweep.
-	static func process(stamp: String) async {
+	/// pipeline, and groups everything into the folder it reports. Shared
+	/// by the live Stop path and the launch-time recovery sweep. A live
+	/// transcript to draft from gets a draft notification while the
+	/// pipeline runs, replaced by the final one under the same identifier.
+	static func process(
+		stamp: String, duration: TimeInterval, draftFrom live: URL? = nil,
+		onStage: StageReport
+	) async {
+		let identifier = "meeting-\(stamp)"
+		var finalAnnounced = false
+		if let live {
+			Task {
+				await postDraft(from: live, identifier: identifier) { finalAnnounced }
+			}
+		}
 		let input = await mixTracks(stamp: stamp)
+		var finished: PipelineResult?
 		let ok = await Subprocess.runLogged(
 			["bun", "src/cli.ts", "transcribe", input.path],
-			currentDirectory: Paths.repoRoot)
-		guard ok else {
+			currentDirectory: Paths.repoRoot
+		) { event in
+			switch event {
+			case .stage(let stage, _):
+				onStage(stage)
+			case .result(let result):
+				finished = result
+				finalAnnounced = true
+				onStage(nil)
+				Notifier.announce(
+					result, silence: "No words in \(hms(duration)) of audio.",
+					identifier: identifier)
+			default:
+				break
+			}
+		}
+		guard let finished else {
 			Notifier.post(
 				title: "Meeting transcription failed",
 				message: "Raw tracks are in meetings/; see tp7companion.log")
 			return
 		}
-		guard let folder = groupArtifacts(stamp: stamp) else {
-			Notifier.post(title: "Meeting transcribed", message: stamp)
-			return
+		if !ok {
+			Log.d("meeting: pipeline failed after reporting a result for \(stamp)")
 		}
-		let transcript = folder.appendingPathComponent("\(folder.lastPathComponent)-transcript.md")
-		Notifier.post(
-			title: title(of: folder), message: summaryLead(of: transcript), opening: transcript)
+		await groupArtifacts(stamp: stamp, into: finished.folder)
 	}
 
-	/// The pipeline's folder is `YYYY-MM-DD_HHMM-<kebab-title>`.
-	private static func title(of folder: URL) -> String {
-		let slug = folder.lastPathComponent.dropFirst("yyyy-MM-dd_HHmm-".count)
-		let words = slug.replacingOccurrences(of: "-", with: " ")
-		return words.prefix(1).uppercased() + words.dropFirst()
-	}
-
-	/// The first paragraph of the transcript file's summary section.
-	private static func summaryLead(of transcript: URL) -> String {
-		guard let text = try? String(contentsOf: transcript, encoding: .utf8),
-			text.hasPrefix("## Summary")
-		else {
-			return "Transcript ready."
+	/// Posts the fast model's title and summary of the live transcript while
+	/// the batch pipeline is still running, unless the final result got
+	/// there first. It has no click target: the live file moves into the
+	/// titled folder once the pipeline finishes.
+	private static func postDraft(
+		from live: URL, identifier: String, superseded: @MainActor () -> Bool
+	) async {
+		_ = await Subprocess.runLogged(
+			["bun", "src/cli.ts", "draft-summary", live.path],
+			currentDirectory: Paths.repoRoot
+		) { event in
+			guard case .draft(let title, let summary) = event, !superseded() else { return }
+			Notifier.post(
+				title: "Draft: \(title)", message: Notifier.lead(of: summary) ?? summary,
+				identifier: identifier)
 		}
-		let body = text.replacingOccurrences(of: "## Summary", with: "")
-		let paragraph = body.components(separatedBy: "\n\n")
-			.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-			.first { !$0.isEmpty } ?? "Transcript ready."
-		return paragraph.count > 240 ? String(paragraph.prefix(237)) + "…" : paragraph
 	}
 
 	/// Captures the companion never finished processing — a quit or crash
 	/// mid-meeting, or a failed pipeline run — leave flat track files with
 	/// no transcript folder. Sweep them through the normal path.
-	static func recoverOrphans() async {
+	static func recoverOrphans(onStage: StageReport) async {
 		let manager = FileManager.default
 		guard
 			let entries = try? manager.contentsOfDirectory(
@@ -340,7 +385,9 @@ final class MeetingSession {
 			let name = url.lastPathComponent
 			guard name.hasSuffix("_meeting.wav") else { continue }
 			let stamp = String(name.dropLast("_meeting.wav".count))
-			if titledFolder(for: stamp) != nil, !manager.fileExists(atPath: micURL(for: stamp).path) {
+			if recoveredFolder(for: stamp) != nil,
+				!manager.fileExists(atPath: micURL(for: stamp).path)
+			{
 				try? manager.removeItem(at: url)
 			}
 		}
@@ -349,15 +396,15 @@ final class MeetingSession {
 			.map { String($0.lastPathComponent.dropLast(micSuffix.count)) }
 			.sorted()
 		for stamp in stamps {
-			// Transcribed but never grouped: just finish the grouping.
-			if titledFolder(for: stamp) != nil {
-				_ = groupArtifacts(stamp: stamp)
-				continue
-			}
 			// An interrupted capture's WAV header was never finalized;
 			// a stream-copy remux repairs it losslessly.
 			await repairHeader(micURL(for: stamp))
 			await repairHeader(systemURL(for: stamp))
+			// Transcribed but never grouped: just finish the grouping.
+			if let folder = recoveredFolder(for: stamp) {
+				await groupArtifacts(stamp: stamp, into: folder)
+				continue
+			}
 			guard let duration = await duration(of: micURL(for: stamp)) else {
 				Log.d("meeting: orphan \(stamp) unreadable, leaving as-is")
 				continue
@@ -371,7 +418,7 @@ final class MeetingSession {
 			Notifier.post(
 				title: "Recovering interrupted meeting",
 				message: "Transcribing \(hms(duration)) from \(stamp)…")
-			await process(stamp: stamp)
+			await process(stamp: stamp, duration: duration, onStage: onStage)
 		}
 	}
 
@@ -445,33 +492,36 @@ final class MeetingSession {
 	}
 
 	/// The rolling transcript, kept beside the pipeline's as a first draft.
-	private func writeLiveTranscript() {
+	/// Returns whether the meeting produced any text to keep.
+	private func writeLiveTranscript() -> Bool {
 		let transcript = liveTranscript()
-		guard !transcript.isEmpty else { return }
+		guard !transcript.isEmpty else { return false }
 		let content = "# Live transcript\n\n" + transcript + "\n"
 		try? content.write(to: liveURL, atomically: true, encoding: .utf8)
+		return true
 	}
 
-	/// The pipeline names its output folder `YYYY-MM-DD_HHMM-<title>` from
-	/// the input filename.
-	private static func titledFolder(for stamp: String) -> URL? {
-		let prefix = String(stamp.prefix("yyyy-MM-dd_HHmm".count))
-		let entries = try? FileManager.default.contentsOfDirectory(
+	/// Crash recovery only, for a capture whose pipeline result was lost: its
+	/// folder is the directory beside the tracks holding a file named for
+	/// the capture, such as the `<stem>.16k.flac` the pipeline leaves there.
+	/// A run that just finished uses the folder it reported instead.
+	private static func recoveredFolder(for stamp: String) -> URL? {
+		let manager = FileManager.default
+		let stem = "\(stamp)_meeting"
+		let entries = try? manager.contentsOfDirectory(
 			at: Paths.meetingsDir, includingPropertiesForKeys: [.isDirectoryKey])
 		return entries?.first { url in
-			url.hasDirectoryPath && url.lastPathComponent.hasPrefix(prefix)
+			url.hasDirectoryPath
+				&& ((try? manager.contentsOfDirectory(atPath: url.path)) ?? [])
+					.contains { $0.hasPrefix(stem) }
 		}
 	}
 
 	/// Moves the raw tracks, markers, and context into the pipeline's
-	/// titled folder. The mix is derived (regenerated on demand), so it's
-	/// dropped rather than kept.
-	private static func groupArtifacts(stamp: String) -> URL? {
+	/// folder, then archives the tracks there as FLAC. The mix is derived
+	/// (regenerated on demand), so it's dropped rather than kept.
+	private static func groupArtifacts(stamp: String, into folder: URL) async {
 		try? FileManager.default.removeItem(at: mixedURL(for: stamp))
-		guard let folder = titledFolder(for: stamp) else {
-			Log.d("meeting: no pipeline folder for \(stamp), leaving tracks flat")
-			return nil
-		}
 		let manager = FileManager.default
 		let artifacts = [
 			micURL(for: stamp), systemURL(for: stamp), markersURL(for: stamp),
@@ -481,7 +531,30 @@ final class MeetingSession {
 			try? manager.moveItem(
 				at: url, to: folder.appendingPathComponent(url.lastPathComponent))
 		}
-		return folder
+		for track in [micURL(for: stamp), systemURL(for: stamp)] {
+			await archiveAsFLAC(folder.appendingPathComponent(track.lastPathComponent))
+		}
+	}
+
+	/// Tracks record as WAV, which survives a crash mid-capture, and are
+	/// stored as FLAC, which is lossless at a fraction of the size. The WAV
+	/// is deleted only once the FLAC reads back at the same duration.
+	private static func archiveAsFLAC(_ wav: URL) async {
+		guard FileManager.default.fileExists(atPath: wav.path) else { return }
+		let flac = wav.deletingPathExtension().appendingPathExtension("flac")
+		let converted = await Subprocess.runLogged(
+			["ffmpeg", "-y", "-v", "error", "-i", wav.path, "-c:a", "flac", flac.path])
+		if converted,
+			let original = await duration(of: wav), original > 0,
+			let archived = await duration(of: flac),
+			abs(original - archived) <= flacDurationTolerance
+		{
+			try? FileManager.default.removeItem(at: wav)
+		} else {
+			Log.d(
+				"meeting: FLAC of \(wav.lastPathComponent) failed verification, keeping the WAV")
+			try? FileManager.default.removeItem(at: flac)
+		}
 	}
 
 	private static func hms(_ seconds: TimeInterval) -> String {

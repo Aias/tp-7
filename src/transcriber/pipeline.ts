@@ -1,30 +1,30 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { z } from 'zod';
-import { createOutputFolder, type SpeakerHint } from './utils.js';
+import { emit } from '../events.js';
+import { createOutputFolder, timed, type SpeakerHint } from './utils.js';
 import { convertToFlac } from './audio.js';
 import { transcribe, type TranscriptionResult } from './transcription.js';
-import { summarize } from './summarization.js';
+import { summarizeAndTitle } from './summarization.js';
 import { cleanTranscript, renderTranscript } from './cleaning.js';
-import { renameOutputFolder, getOutputFilenames } from './naming.js';
-import { refineSpeakerIdentification, logSpeakerIdentification } from './speaker-identification.js';
+import { renameOutputFolder, getOutputFilenames, humanizeTitle } from './naming.js';
+import {
+	refineSpeakerIdentification,
+	logSpeakerIdentification,
+	renderUtterances,
+} from './speaker-identification.js';
 import { getKnownSpeakers } from './transcription.config.loader.js';
+import { MODELS } from './openai.js';
 
 export interface TranscriptionOptions {
 	inputPath: string;
 	speakers?: SpeakerHint;
 	outputDir?: string;
-}
-
-export interface CleaningOptions {
-	transcriptPath: string;
-	transcriptData?: TranscriptionResult;
-}
-
-export interface SummarizationOptions {
-	transcript: string;
-	outputDir: string;
-	originalFilename: string;
+	/**
+	 * The recording's corrected start, local `YYYY-MM-DDTHH:MM`. Read when the
+	 * folder is named, so a correction made while the recording transcribes
+	 * still applies.
+	 */
+	getStartedAt?: () => string | undefined;
 }
 
 /**
@@ -41,10 +41,15 @@ export async function runTranscriptionOnly(options: TranscriptionOptions): Promi
 	const outputDir = options.outputDir || createOutputFolder(inputPath);
 	console.log(`📁 Output folder: ${outputDir}`);
 
-	const audioPath = await convertToFlac(inputPath, outputDir);
+	const name = path.basename(inputPath);
+	emit({ event: 'stage', stage: 'converting', input: inputPath });
+	const audioPath = await timed(`Conversion of ${name}`, () =>
+		convertToFlac(inputPath, outputDir),
+	);
 
 	// Transcribe and get sentences/paragraphs
-	const result = await transcribe(audioPath, speakers);
+	emit({ event: 'stage', stage: 'transcribing', input: inputPath });
+	const result = await timed(`Transcription of ${name}`, () => transcribe(audioPath, speakers));
 
 	// Save the complete output to JSON
 	const jsonPath = path.join(outputDir, 'transcript-raw.json');
@@ -54,151 +59,143 @@ export async function runTranscriptionOnly(options: TranscriptionOptions): Promi
 	return { outputDir, transcriptionOutput: result, transcriptPath: jsonPath };
 }
 
-// Schema for the complete transcription output
-const TranscriptionResultSchema = z.object({
-	transcript: z.any(),
-	sentences: z.any(),
-	paragraphs: z.any(),
-});
-
 /**
- * Run only the cleaning step on an existing transcript
+ * Edit the transcript, resolve speaker names, and summarize it. The summary
+ * reads the transcript as AssemblyAI heard it, under the resolved names, so it
+ * starts as soon as the names are known and runs alongside the editing.
  */
-export async function runCleaningOnly(options: CleaningOptions): Promise<string> {
-	const { transcriptPath } = options;
-	let transcriptionOutput: TranscriptionResult;
-
-	// Check if we have transcript data provided or need to load it
-	if (options.transcriptData) {
-		transcriptionOutput = options.transcriptData;
-	} else {
-		// Load transcript from JSON file
-		console.log(`📖 Reading transcript JSON from ${transcriptPath}...`);
-		const jsonContent = fs.readFileSync(transcriptPath, 'utf-8');
-
-		try {
-			const parsed = JSON.parse(jsonContent) as unknown;
-			// Validate the parsed JSON has the required structure
-			const validated = TranscriptionResultSchema.parse(parsed);
-			transcriptionOutput = validated as TranscriptionResult; // We're trusting our own output schema here.
-		} catch (error) {
-			if (error instanceof z.ZodError) {
-				console.error('❌ Invalid transcript JSON structure:', error.message);
-				throw new Error(`Invalid transcript file: ${transcriptPath}`, { cause: error });
-			}
-			throw error;
-		}
-	}
-
-	// Resolving speaker names and editing the passages are independent — names are
-	// applied when the transcript is rendered — so both run at once.
-	const [speakerMap, groups] = await Promise.all([
-		getKnownSpeakers().then((knownSpeakers) =>
-			refineSpeakerIdentification(transcriptionOutput.transcript, knownSpeakers),
-		),
-		cleanTranscript(transcriptionOutput),
-	]);
-	logSpeakerIdentification(speakerMap);
-
-	return renderTranscript(groups, speakerMap);
-}
-
-/**
- * Summarize the transcript, title the output folder from the summary, and
- * save the summary and transcript together in it.
- */
-export async function runSummarizationOnly(options: SummarizationOptions): Promise<{
-	summaryPath: string;
-	summary: string;
-}> {
-	const { transcript, originalFilename } = options;
-	const summary = await summarize(transcript);
-
-	console.log('💾 Writing summary...');
-	fs.writeFileSync(
-		path.join(options.outputDir, 'summary.md'),
-		`## Summary\n\n${summary}\n\n---\n\n## Transcript\n\n${transcript}\n`,
+async function cleanAndSummarize(transcriptionOutput: TranscriptionResult, inputPath: string) {
+	const name = path.basename(inputPath);
+	emit({ event: 'stage', stage: 'cleaning', input: inputPath });
+	const knownSpeakers = await getKnownSpeakers();
+	const cleaning = timed(`Cleaning of ${name}`, () => cleanTranscript(transcriptionOutput));
+	const reconciliation = timed(`Speaker reconciliation of ${name}`, () =>
+		refineSpeakerIdentification(transcriptionOutput.transcript, knownSpeakers),
 	);
+	const summary = reconciliation
+		.then((speakerMap) => {
+			emit({ event: 'stage', stage: 'summarizing', input: inputPath });
+			return timed(`Summary of ${name}`, () =>
+				summarizeAndTitle(
+					renderUtterances(transcriptionOutput.transcript, speakerMap),
+					MODELS.judgment,
+				),
+			);
+		})
+		.catch((error: unknown) => {
+			console.error(
+				'\n⚠️  Summarization failed:',
+				error instanceof Error ? error.message : String(error),
+			);
+			return null;
+		});
 
-	const outputDir = await renameOutputFolder(options.outputDir, summary, originalFilename);
-	const summaryPath = path.join(outputDir, getOutputFilenames(path.basename(outputDir)).final);
-	fs.renameSync(path.join(outputDir, 'summary.md'), summaryPath);
+	const [groups, speakerMap, summarized] = await Promise.all([cleaning, reconciliation, summary]);
+	logSpeakerIdentification(speakerMap);
+	return { cleanedText: renderTranscript(groups, speakerMap), summarized };
+}
 
-	console.log(`✅ Summary saved → ${summaryPath}`);
-	return { summaryPath, summary };
+export interface PipelineResult {
+	/** Absolute path of the recording's titled folder. */
+	folder: string;
+	/** Absolute path of the final transcript inside it. */
+	transcript: string;
+	/** Null when there was no speech or summarization failed. */
+	title: string | null;
+	summary: string | null;
+	speech: boolean;
+}
+
+const hasSpeech = ({ transcript }: TranscriptionResult) =>
+	Boolean(transcript.words?.length) || Boolean(transcript.text?.trim());
+
+const firstParagraph = (text: string) => text.split(/\n\s*\n/, 1)[0] ?? text;
+
+function reportResult(input: string, result: PipelineResult): PipelineResult {
+	emit({
+		event: 'result',
+		input,
+		...result,
+		summary: result.summary === null ? null : firstParagraph(result.summary),
+	});
+	return result;
+}
+
+function fileTranscript(
+	outputDir: string,
+	rawPath: string,
+	options: TranscriptionOptions,
+	title: string,
+	markdown: string,
+) {
+	const folder = renameOutputFolder(outputDir, title, options.inputPath, options.getStartedAt?.());
+	const filenames = getOutputFilenames(path.basename(folder));
+	const newRawPath = path.join(folder, filenames.raw);
+	fs.renameSync(path.join(folder, path.basename(rawPath)), newRawPath);
+	const transcript = path.join(folder, filenames.final);
+	fs.writeFileSync(transcript, markdown);
+	console.log(`\n📄 Raw transcript saved → ${newRawPath}`);
+	console.log(`📝 Transcript saved → ${transcript}`);
+	return { folder, transcript };
 }
 
 /**
- * Run the full pipeline (backward compatibility)
+ * Run the full pipeline: transcribe, edit, summarize, then file the transcript
+ * and its raw JSON in a folder named for the recording's time and title.
  */
-export async function runFullPipeline(options: TranscriptionOptions): Promise<void> {
-	const { inputPath, speakers } = options;
+export async function runFullPipeline(options: TranscriptionOptions): Promise<PipelineResult> {
+	const { speakers } = options;
+	const inputPath = path.resolve(options.inputPath);
 
-	// Step 1: Transcribe
 	const { outputDir, transcriptionOutput, transcriptPath } = await runTranscriptionOnly({
 		inputPath,
 		speakers,
 	});
 
-	// Step 2: Resolve speaker names and clean
-	const cleanedText = await runCleaningOnly({
-		transcriptPath,
-		transcriptData: transcriptionOutput,
-	});
-
-	// Step 3: Summarize with folder renaming
-	try {
-		const { summaryPath, summary } = await runSummarizationOnly({
-			transcript: cleanedText,
+	if (!hasSpeech(transcriptionOutput)) {
+		console.log('🔇 No speech detected.');
+		const { folder, transcript } = fileTranscript(
 			outputDir,
-			originalFilename: inputPath,
+			transcriptPath,
+			options,
+			'no-speech',
+			'## Transcript\n\nNo speech was detected in this recording.\n',
+		);
+		return reportResult(inputPath, {
+			folder,
+			transcript,
+			title: null,
+			summary: null,
+			speech: false,
 		});
-
-		// Rename the raw transcript to match the folder name
-		const finalOutputDir = path.dirname(summaryPath);
-		const currentRawPath = path.join(finalOutputDir, path.basename(transcriptPath));
-		const newRawPath = path.join(
-			finalOutputDir,
-			getOutputFilenames(path.basename(finalOutputDir)).raw,
-		);
-		if (fs.existsSync(currentRawPath)) {
-			fs.renameSync(currentRawPath, newRawPath);
-		}
-
-		// Print results
-		console.log(`\n📄 Raw transcript saved → ${newRawPath}`);
-		console.log(`📝 Transcript saved → ${summaryPath}`);
-		console.log('\n---\n');
-		console.log('## Summary\n\n' + summary + '\n');
-		console.log('---\n');
-		console.log(cleanedText);
-	} catch (error) {
-		console.error(
-			'\n⚠️  Summarization failed:',
-			error instanceof Error ? error.message : String(error),
-		);
-
-		// Still rename folder with basic naming if summary failed
-		const { extractDateTimeFromFilename, getCurrentDate } = await import('./naming.js');
-		const dateTime = extractDateTimeFromFilename(inputPath) ?? getCurrentDate();
-		const newFolderName = `${dateTime}-untitled`;
-		const newPath = path.join(path.dirname(outputDir), newFolderName);
-
-		if (outputDir !== newPath && fs.existsSync(outputDir)) {
-			fs.renameSync(outputDir, newPath);
-		}
-		if (fs.existsSync(newPath)) {
-			const filenames = getOutputFilenames(newFolderName);
-			const currentRawPath = path.join(newPath, path.basename(transcriptPath));
-			if (fs.existsSync(currentRawPath)) {
-				fs.renameSync(currentRawPath, path.join(newPath, filenames.raw));
-			}
-			const finalPath = path.join(newPath, filenames.final);
-			fs.writeFileSync(finalPath, `## Transcript\n\n${cleanedText}\n`);
-			console.log(`\n📝 Transcript saved → ${finalPath}`);
-		}
-		console.log('\n---\n');
-		console.log('## Transcript\n');
-		console.log(cleanedText);
 	}
+
+	const { cleanedText, summarized } = await cleanAndSummarize(transcriptionOutput, inputPath);
+
+	const { folder, transcript } = fileTranscript(
+		outputDir,
+		transcriptPath,
+		options,
+		summarized?.title ?? 'untitled',
+		summarized
+			? `## Summary\n\n${summarized.summary}\n\n---\n\n## Transcript\n\n${cleanedText}\n`
+			: `## Transcript\n\n${cleanedText}\n`,
+	);
+
+	console.log('\n---\n');
+	if (summarized) {
+		console.log('## Summary\n\n' + summarized.summary + '\n');
+		console.log('---\n');
+	} else {
+		console.log('## Transcript\n');
+	}
+	console.log(cleanedText);
+
+	return reportResult(inputPath, {
+		folder,
+		transcript,
+		title: summarized ? humanizeTitle(summarized.title) : null,
+		summary: summarized?.summary ?? null,
+		speech: true,
+	});
 }
