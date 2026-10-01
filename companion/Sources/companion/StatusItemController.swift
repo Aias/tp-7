@@ -7,7 +7,9 @@ enum DeviceState: Equatable {
 	/// Device present and gesture events are flowing (MIDI=ctrl).
 	case control
 	case ingesting
-	case processing
+	/// A pipeline job at work: what it's transcribing, and the stage it has
+	/// reached once the pipeline reports one.
+	case processing(activity: String, stage: PipelineEvent.Stage?)
 	case dictating
 	case meetingArmed
 	case meetingRecording
@@ -35,13 +37,25 @@ enum DeviceState: Equatable {
 		case .recorder: "recorder mode"
 		case .control: "control mode"
 		case .ingesting: "ingesting…"
-		case .processing: "transcribing meeting…"
+		case .processing(let activity, let stage):
+			stage.map { "\(activity)… · \($0.label)" } ?? "\(activity)…"
 		case .dictating: "dictating…"
 		case .meetingArmed: "meeting armed — play to start"
 		case .meetingRecording: "recording meeting…"
 		case .meetingPaused: "meeting paused"
 		case .agentRequest(let verb):
 			"\(verb.rawValue) request — hold memo to speak, same button to cancel"
+		}
+	}
+}
+
+extension PipelineEvent.Stage {
+	var label: String {
+		switch self {
+		case .converting: "converting audio"
+		case .transcribing: "recognizing speech"
+		case .cleaning: "cleaning"
+		case .summarizing: "summarizing"
 		}
 	}
 }
@@ -121,7 +135,11 @@ final class StatusItemController {
 		if let lastGesture {
 			gestureItem.title = "last gesture: \(lastGesture)"
 		}
-		let deviceAvailable = state == .recorder || state == .control || state == .processing
+		let deviceAvailable =
+			switch state {
+			case .recorder, .control, .processing: true
+			default: false
+			}
 		ingestItem.isEnabled = deviceAvailable
 		browseItem.isEnabled = deviceAvailable
 	}

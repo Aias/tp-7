@@ -34,6 +34,10 @@ enum PipelineEvent: Sendable {
 	}
 }
 
+/// Receives the stage a pipeline job has reached; nil once it finishes a
+/// recording.
+typealias StageReport = @MainActor (PipelineEvent.Stage?) -> Void
+
 /// The outcome of one recording's pipeline run. `title` and `summary` are
 /// nil when the recording had no speech.
 struct PipelineResult: Sendable, Decodable {

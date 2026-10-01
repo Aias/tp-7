@@ -17,8 +17,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var pendingRequest: (verb: AgentVerb, context: CaptureContext)?
 	private var requestTimer: Timer?
 	private var instruction: DictationSession?
-	/// Meetings being mixed and transcribed after Stop (or recovered at launch).
-	private var processing = 0
+	/// A pipeline run the menu reports on while it works.
+	@MainActor
+	private final class Job {
+		let activity: String
+		var stage: PipelineEvent.Stage?
+
+		init(activity: String) {
+			self.activity = activity
+		}
+	}
+
+	/// Meetings being mixed and transcribed after Stop (or recovered at
+	/// launch) and recordings transcribed after a pull, oldest first.
+	private var jobs: [Job] = []
 	private var wired = false
 	/// Launch counts as a dock, so it starts long unwired.
 	private var unwiredSince: Date? = .distantPast
@@ -58,7 +70,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				Log.d("model preparation failed: \(error)")
 			}
 		}
-		process { await MeetingSession.recoverOrphans() }
+		process("transcribing meeting") { report in
+			await MeetingSession.recoverOrphans(onStage: report)
+		}
 	}
 
 	private func handle(_ event: MIDIEvent) {
@@ -79,7 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 					Notifier.post(
 						title: "TP-7 unplugged",
 						message: "Meeting capture ended.")
-					process { await meeting.finish() }
+					process("transcribing meeting") { report in
+						await meeting.finish(onStage: report)
+					}
 				}
 			}
 			if !present && devicePresent && gesturesSeen && !ingesting {
@@ -219,12 +235,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		}
 	}
 
-	private func process(_ work: @escaping @MainActor () async -> Void) {
-		processing += 1
+	/// Runs pipeline work as a job the menu shows, with the stage the work
+	/// reports.
+	private func process(
+		_ activity: String, _ work: @escaping @MainActor (StageReport) async -> Void
+	) {
+		let job = Job(activity: activity)
+		jobs.append(job)
 		render()
 		Task {
-			await work()
-			processing -= 1
+			await work { [weak self] stage in
+				job.stage = stage
+				self?.render()
+			}
+			jobs.removeAll { $0 === job }
 			render()
 		}
 	}
@@ -284,7 +308,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		if meeting.phase == .armed {
 			meeting.cancel()
 		} else {
-			process { await meeting.finish() }
+			process("transcribing meeting") { report in
+				await meeting.finish(onStage: report)
+			}
 		}
 	}
 
@@ -336,9 +362,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 					message: "See ~/Library/Logs/tp7companion.log")
 			}
 			render()
-			process {
+			process("transcribing recordings") { report in
 				let transcribed = await Subprocess.runLogged(
-					["bun", "src/cli.ts", "transcribe-pulled"], currentDirectory: Paths.repoRoot)
+					["bun", "src/cli.ts", "transcribe-pulled"],
+					currentDirectory: Paths.repoRoot
+				) { event in
+					switch event {
+					case .stage(let stage, _):
+						report(stage)
+					case .result(let result):
+						report(nil)
+						Notifier.announce(
+							result, silence: "No words in \(result.input.lastPathComponent).")
+					default:
+						break
+					}
+				}
 				if !transcribed {
 					Notifier.post(
 						title: "TP-7 transcription failed",
@@ -424,7 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		if let pending = pendingRequest { return .agentRequest(pending.verb) }
 		if dictation != nil { return .dictating }
 		if ingesting { return .ingesting }
-		if processing > 0 { return .processing }
+		if let job = jobs.last { return .processing(activity: job.activity, stage: job.stage) }
 		if let meeting {
 			switch meeting.phase {
 			case .armed: return .meetingArmed

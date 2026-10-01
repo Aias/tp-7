@@ -274,7 +274,7 @@ final class MeetingSession {
 
 	/// Stops both tracks, mixes them, and runs the batch transcription
 	/// pipeline; artifacts group into the pipeline's titled folder.
-	func finish() async {
+	func finish(onStage: StageReport) async {
 		let duration = elapsed
 		noteEnded()
 		capture.stop()
@@ -298,7 +298,8 @@ final class MeetingSession {
 			title: "Meeting captured",
 			message: "Transcribing \(Self.hms(duration)) of audio…")
 		await Self.process(
-			stamp: stamp, duration: duration, draftFrom: hasLiveTranscript ? liveURL : nil)
+			stamp: stamp, duration: duration, draftFrom: hasLiveTranscript ? liveURL : nil,
+			onStage: onStage)
 	}
 
 	/// Mixes a finished capture's tracks, runs the batch transcription
@@ -307,7 +308,8 @@ final class MeetingSession {
 	/// transcript to draft from gets a draft notification while the
 	/// pipeline runs, replaced by the final one under the same identifier.
 	static func process(
-		stamp: String, duration: TimeInterval, draftFrom live: URL? = nil
+		stamp: String, duration: TimeInterval, draftFrom live: URL? = nil,
+		onStage: StageReport
 	) async {
 		let identifier = "meeting-\(stamp)"
 		var finalAnnounced = false
@@ -322,12 +324,19 @@ final class MeetingSession {
 			["bun", "src/cli.ts", "transcribe", input.path],
 			currentDirectory: Paths.repoRoot
 		) { event in
-			guard case .result(let result) = event else { return }
-			finished = result
-			finalAnnounced = true
-			Notifier.announce(
-				result, silence: "No words in \(hms(duration)) of audio.",
-				identifier: identifier)
+			switch event {
+			case .stage(let stage, _):
+				onStage(stage)
+			case .result(let result):
+				finished = result
+				finalAnnounced = true
+				onStage(nil)
+				Notifier.announce(
+					result, silence: "No words in \(hms(duration)) of audio.",
+					identifier: identifier)
+			default:
+				break
+			}
 		}
 		guard let finished else {
 			Notifier.post(
@@ -362,7 +371,7 @@ final class MeetingSession {
 	/// Captures the companion never finished processing — a quit or crash
 	/// mid-meeting, or a failed pipeline run — leave flat track files with
 	/// no transcript folder. Sweep them through the normal path.
-	static func recoverOrphans() async {
+	static func recoverOrphans(onStage: StageReport) async {
 		let manager = FileManager.default
 		guard
 			let entries = try? manager.contentsOfDirectory(
@@ -407,7 +416,7 @@ final class MeetingSession {
 			Notifier.post(
 				title: "Recovering interrupted meeting",
 				message: "Transcribing \(hms(duration)) from \(stamp)…")
-			await process(stamp: stamp, duration: duration)
+			await process(stamp: stamp, duration: duration, onStage: onStage)
 		}
 	}
 
