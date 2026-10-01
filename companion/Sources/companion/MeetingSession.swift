@@ -22,6 +22,8 @@ final class MeetingSession {
 	private static let sampleRate = 48_000.0
 	/// Captures shorter than this are button tests, not meetings, and are deleted.
 	private static let minTranscribeSeconds = 5.0
+	/// How far an archived FLAC's duration may differ from its WAV's.
+	private static let flacDurationTolerance = 0.1
 
 	private let capture = AudioCapture()
 	private let systemAudio = SystemAudioCapture()
@@ -347,7 +349,7 @@ final class MeetingSession {
 		if !ok {
 			Log.d("meeting: pipeline failed after reporting a result for \(stamp)")
 		}
-		groupArtifacts(stamp: stamp, into: finished.folder)
+		await groupArtifacts(stamp: stamp, into: finished.folder)
 	}
 
 	/// Posts the fast model's title and summary of the live transcript while
@@ -394,15 +396,15 @@ final class MeetingSession {
 			.map { String($0.lastPathComponent.dropLast(micSuffix.count)) }
 			.sorted()
 		for stamp in stamps {
-			// Transcribed but never grouped: just finish the grouping.
-			if let folder = recoveredFolder(for: stamp) {
-				groupArtifacts(stamp: stamp, into: folder)
-				continue
-			}
 			// An interrupted capture's WAV header was never finalized;
 			// a stream-copy remux repairs it losslessly.
 			await repairHeader(micURL(for: stamp))
 			await repairHeader(systemURL(for: stamp))
+			// Transcribed but never grouped: just finish the grouping.
+			if let folder = recoveredFolder(for: stamp) {
+				await groupArtifacts(stamp: stamp, into: folder)
+				continue
+			}
 			guard let duration = await duration(of: micURL(for: stamp)) else {
 				Log.d("meeting: orphan \(stamp) unreadable, leaving as-is")
 				continue
@@ -516,9 +518,9 @@ final class MeetingSession {
 	}
 
 	/// Moves the raw tracks, markers, and context into the pipeline's
-	/// folder. The mix is derived (regenerated on demand), so it's dropped
-	/// rather than kept.
-	private static func groupArtifacts(stamp: String, into folder: URL) {
+	/// folder, then archives the tracks there as FLAC. The mix is derived
+	/// (regenerated on demand), so it's dropped rather than kept.
+	private static func groupArtifacts(stamp: String, into folder: URL) async {
 		try? FileManager.default.removeItem(at: mixedURL(for: stamp))
 		let manager = FileManager.default
 		let artifacts = [
@@ -528,6 +530,30 @@ final class MeetingSession {
 		for url in artifacts where manager.fileExists(atPath: url.path) {
 			try? manager.moveItem(
 				at: url, to: folder.appendingPathComponent(url.lastPathComponent))
+		}
+		for track in [micURL(for: stamp), systemURL(for: stamp)] {
+			await archiveAsFLAC(folder.appendingPathComponent(track.lastPathComponent))
+		}
+	}
+
+	/// Tracks record as WAV, which survives a crash mid-capture, and are
+	/// stored as FLAC, which is lossless at a fraction of the size. The WAV
+	/// is deleted only once the FLAC reads back at the same duration.
+	private static func archiveAsFLAC(_ wav: URL) async {
+		guard FileManager.default.fileExists(atPath: wav.path) else { return }
+		let flac = wav.deletingPathExtension().appendingPathExtension("flac")
+		let converted = await Subprocess.runLogged(
+			["ffmpeg", "-y", "-v", "error", "-i", wav.path, "-c:a", "flac", flac.path])
+		if converted,
+			let original = await duration(of: wav), original > 0,
+			let archived = await duration(of: flac),
+			abs(original - archived) <= flacDurationTolerance
+		{
+			try? FileManager.default.removeItem(at: wav)
+		} else {
+			Log.d(
+				"meeting: FLAC of \(wav.lastPathComponent) failed verification, keeping the WAV")
+			try? FileManager.default.removeItem(at: flac)
 		}
 	}
 
