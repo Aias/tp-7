@@ -1,6 +1,6 @@
 # tp7sync
 
-Pulls recordings off a teenage engineering TP-7 field recorder, transcribes them, and files everything into `~/Music/recordings` — one folder per recording, holding the raw WAV, diarized transcripts, and an AI summary.
+Pulls recordings off a teenage engineering TP-7 field recorder, transcribes them, and files everything into `~/Recordings` — one folder per recording, holding the raw WAV, diarized transcripts, and an AI summary.
 
 ## How it works
 
@@ -14,8 +14,8 @@ The [tp7 CLI](https://github.com/totocaster/tp7) bridges the two: it sends a dev
 On top of that, tp7sync runs the ingest loop:
 
 1. Detect the TP-7 on USB (cheap; does not disturb audio mode).
-2. List `/recordings` and `/memo` on the device, diff against the manifest at `~/Music/recordings/.tp7sync/manifest.json`.
-3. Pull each new file into `~/Music/recordings/meetings` (from `/recordings`) or `~/Music/recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset, and ingest posts a notification naming it.
+2. List `/recordings` and `/memo` on the device, diff against the manifest at `~/Recordings/.tp7sync/manifest.json`.
+3. Pull each new file into `~/Recordings/meetings` (from `/recordings`) or `~/Recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset, and ingest posts a notification naming it.
 4. Run the transcription pipeline (AssemblyAI diarization → speaker identification → clean-verbatim editing → summary → AI-generated title) over each pulled file, which produces a `YYYY-MM-DD_HHMM-title/` folder beside it. Pulled files that fail to transcribe are retried on the next run.
 5. Move the WAV into that folder and post a macOS notification.
 
