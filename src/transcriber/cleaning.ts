@@ -7,10 +7,12 @@ import { formatSpeakerName, type SpeakerMap } from './speaker-identification.js'
 import { processWithPool } from './concurrency.js';
 import { MODELS, openai } from './openai.js';
 
-// Sentences per request. Larger packs finish sooner but leave more fillers in
-// their later turns; at this size cleaning still finishes before the summary.
-const SENTENCES_PER_REQUEST = 15;
-const CONCURRENCY = 10;
+// Sentences per request. Larger packs leave fillers in their later turns; at
+// this size cleaning matches one turn per request in about half the requests.
+const SENTENCES_PER_REQUEST = 5;
+// A turn longer than this is edited in parts, each a request of its own.
+const MAX_TURN_SENTENCES = 40;
+const CONCURRENCY = 20;
 
 // Trailing characters of the preceding request carried in as context, so a
 // passage that opens mid-thought still resolves.
@@ -235,7 +237,7 @@ export async function cleanTranscript(
 	console.log(`  Found ${sentences.length} sentences to clean`);
 
 	const systemPrompt = makeTurnsSystemPrompt(await getVocabulary());
-	const turns = splitTurns(sentences, SENTENCES_PER_REQUEST);
+	const turns = splitTurns(sentences, MAX_TURN_SENTENCES);
 	const requests = packTurns(turns, SENTENCES_PER_REQUEST);
 	console.log(
 		`  Packed ${turns.length} turns into ${requests.length} requests (parallel, concurrency=${CONCURRENCY})`,
