@@ -109,7 +109,6 @@ final class MeetingSession {
 
 	func start() async throws {
 		guard !cancelled else { return }
-		let context = await CaptureContext.current()
 		// The TP-7 mic when wired; over BLE (gestures only, no audio path)
 		// the Mac's default input keeps the room track alive.
 		let device: AudioDeviceID
@@ -133,7 +132,6 @@ final class MeetingSession {
 		}
 		try FileManager.default.createDirectory(
 			at: Paths.meetingsDir, withIntermediateDirectories: true)
-		writeContext(context)
 		micFile = try AVAudioFile(
 			forWriting: micURL,
 			settings: [
@@ -154,6 +152,9 @@ final class MeetingSession {
 			self.micFramesWritten += AVAudioFramePosition(buffer.frameLength)
 			self.liveTranscriber.feedMic(buffer)
 		}
+		// The context query reads accessibility and sometimes runs git, so it
+		// gathers while system audio starts rather than ahead of the mic.
+		let context = Task { await CaptureContext.current() }
 		// System audio is best-effort: a missing Screen Recording permission
 		// degrades to mic-only capture rather than blocking the meeting.
 		do {
@@ -180,6 +181,7 @@ final class MeetingSession {
 				title: "Meeting is mic-only",
 				message: "System audio needs the Screen Recording permission.")
 		}
+		let captureContext = await context.value
 		// Stop/Rec/unplug may have disarmed while system audio was starting.
 		if cancelled {
 			Log.d("meeting: start cancelled, discarding \(stamp)")
@@ -190,9 +192,9 @@ final class MeetingSession {
 			systemFile = nil
 			try? FileManager.default.removeItem(at: micURL)
 			try? FileManager.default.removeItem(at: systemURL)
-			try? FileManager.default.removeItem(at: contextURL)
 			return
 		}
+		writeContext(captureContext)
 		phase = .recording
 		Log.d("meeting: recording → \(micURL.lastPathComponent)")
 		Task { [weak self] in
