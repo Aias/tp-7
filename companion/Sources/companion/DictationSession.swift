@@ -11,14 +11,26 @@ final class DictationSession {
 	private let capture = AudioCapture()
 	private let inserter: TextInserter?
 	private var analyzer: SpeechAnalyzer?
-	private var transcriber: SpeechTranscriber?
+	private var analyzerStartup: Task<Void, any Error>?
 	private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
 	private var resultsTask: Task<Void, Never>?
 	private var finalizedText = ""
 	private var volatileText = ""
 	private var previousVolatile = ""
+	/// Set when the memo is released. A `start()` still waiting on the Speech
+	/// framework at that point must not begin capturing afterwards.
+	private var finished = false
 	private let audioURL: URL
 	private var context: Task<CaptureContext, Never>?
+
+	/// The analyzer's input format depends only on the locale's transcriber,
+	/// so it is resolved once and capture can start before any Speech call.
+	private static var analyzerFormat: AVAudioFormat?
+	/// A transcriber and analyzer prepared ahead of the next dictation.
+	/// Preparing speeds up only the instance prepared, and an analyzer serves
+	/// one dictation, so each session takes the spare and the next is
+	/// prepared behind it.
+	private static var spare: (transcriber: SpeechTranscriber, analyzer: SpeechAnalyzer)?
 
 	init(inserter: TextInserter?) {
 		self.inserter = inserter
@@ -28,20 +40,65 @@ final class DictationSession {
 		audioURL = audioDir.appendingPathComponent("\(Self.timestamp())-dictation.flac")
 	}
 
+	/// Installs the on-device transcription model, then prepares the first
+	/// analyzer and resolves the input format.
+	static func prepareModel() async throws {
+		try await installModel()
+		await warm()
+	}
+
+	private static func makeTranscriber() -> SpeechTranscriber {
+		SpeechTranscriber(
+			locale: Locale.current, transcriptionOptions: [],
+			reportingOptions: [.volatileResults], attributeOptions: [])
+	}
+
+	private static func resolveFormat(for transcriber: SpeechTranscriber) async -> AVAudioFormat? {
+		if analyzerFormat == nil {
+			analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
+				compatibleWith: [transcriber])
+		}
+		return analyzerFormat
+	}
+
+	/// Prepares the spare analyzer, resolving the input format on the way.
+	private static func warm() async {
+		guard spare == nil else { return }
+		let transcriber = makeTranscriber()
+		guard let format = await resolveFormat(for: transcriber) else { return }
+		let analyzer = SpeechAnalyzer(modules: [transcriber])
+		do {
+			try await analyzer.prepareToAnalyze(in: format)
+		} catch {
+			Log.d("dictation: analyzer preparation failed: \(error)")
+			return
+		}
+		if spare == nil {
+			spare = (transcriber, analyzer)
+		}
+	}
+
+	private static func takeAnalyzer() -> (transcriber: SpeechTranscriber, analyzer: SpeechAnalyzer) {
+		if let spare {
+			self.spare = nil
+			return spare
+		}
+		let transcriber = makeTranscriber()
+		return (transcriber, SpeechAnalyzer(modules: [transcriber]))
+	}
+
 	/// Ensures the on-device transcription model is installed. The model
 	/// store is system-wide; when the locale's assets are already present,
 	/// skip the per-app allocation request (a bare SwiftPM executable has
 	/// no persistent identity, so the request would repeat every launch).
-	static func prepareModel() async throws {
+	private static func installModel() async throws {
 		let locale = Locale.current
 		let installed = await SpeechTranscriber.installedLocales
 		if installed.contains(where: { $0.identifier == locale.identifier }) {
 			Log.d("model: ready (\(locale.identifier))")
 			return
 		}
-		let transcriber = SpeechTranscriber(
-			locale: locale, transcriptionOptions: [],
-			reportingOptions: [.volatileResults], attributeOptions: [])
+		let transcriber = makeTranscriber()
 		if let request = try await AssetInventory.assetInstallationRequest(
 			supporting: [transcriber])
 		{
@@ -53,25 +110,26 @@ final class DictationSession {
 		}
 	}
 
+	/// Captures before the analyzer starts: buffers queue in the input stream
+	/// until the analyzer consumes them, so speech in the first moments of
+	/// the memo is never lost to Speech framework startup.
 	func start() async throws {
+		guard !finished else { return }
 		guard let device = AudioCapture.findTP7Device() else {
 			throw DictationError.deviceNotFound
 		}
-		context = Task { await CaptureContext.current() }
-		let transcriber = SpeechTranscriber(
-			locale: Locale.current, transcriptionOptions: [],
-			reportingOptions: [.volatileResults], attributeOptions: [])
-		self.transcriber = transcriber
-		let analyzer = SpeechAnalyzer(modules: [transcriber])
-		self.analyzer = analyzer
-		guard
-			let format = await SpeechAnalyzer.bestAvailableAudioFormat(
-				compatibleWith: [transcriber])
-		else {
+		let (transcriber, analyzer) = Self.takeAnalyzer()
+		guard let format = await Self.resolveFormat(for: transcriber) else {
 			throw DictationError.noCompatibleFormat
 		}
+		guard !finished else { return }
 		let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
 		inputContinuation = continuation
+		try capture.start(device: device, outputFormat: format, archiveURL: audioURL) {
+			buffer in
+			continuation.yield(AnalyzerInput(buffer: buffer))
+		}
+		self.analyzer = analyzer
 		inserter?.beginUtterance()
 		resultsTask = Task { [weak self] in
 			do {
@@ -103,24 +161,35 @@ final class DictationSession {
 				Log.d("transcriber: results stream error: \(error)")
 			}
 		}
-		try await analyzer.start(inputSequence: stream)
-		Log.d("dictation: analyzer started")
-		try capture.start(device: device, outputFormat: format, archiveURL: audioURL) {
-			buffer in
-			continuation.yield(AnalyzerInput(buffer: buffer))
+		let startup = Task { try await analyzer.start(inputSequence: stream) }
+		analyzerStartup = startup
+		context = Task { await CaptureContext.current() }
+		do {
+			try await startup.value
+		} catch {
+			capture.stop()
+			continuation.finish()
+			resultsTask?.cancel()
+			throw error
 		}
+		Log.d("dictation: analyzer started")
 	}
 
 	/// Stops capture, finalizes the transcript, and archives it. Returns the
-	/// final text.
+	/// final text. Safe while `start()` is still in flight: the engine stops
+	/// at once, finalizing waits for the analyzer to finish starting, and a
+	/// `start()` that has not begun capturing never will.
 	func finish() async -> String {
+		finished = true
 		capture.stop()
 		inputContinuation?.finish()
 		do {
+			try await analyzerStartup?.value
 			try await analyzer?.finalizeAndFinishThroughEndOfInput()
 		} catch {
-			Log.d("dictation: finalize failed: \(error)")
+			Log.d("dictation: analyzer failed: \(error)")
 		}
+		Task { await Self.warm() }
 		resultsTask?.cancel()
 		let text = (finalizedText + volatileText)
 			.trimmingCharacters(in: .whitespacesAndNewlines)

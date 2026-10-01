@@ -236,7 +236,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			do {
 				try await session.start()
 			} catch {
-				instruction = nil
+				if instruction === session {
+					instruction = nil
+				}
 				Log.d("agent: instruction capture failed: \(error)")
 				completeRequest(instruction: nil)
 			}
@@ -294,7 +296,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			do {
 				try await session.start()
 			} catch {
-				dictation = nil
+				if dictation === session {
+					dictation = nil
+				}
 				Notifier.post(
 					title: "Dictation failed",
 					message: "Could not capture from the TP-7: \(error)")

@@ -111,7 +111,7 @@ The dock/undock mode flip is currently a one-toggle on-device step; the menu bar
 
 ## Dictation
 
-Memo hold (CC 27 press) starts capture from the TP-7 mic over USB; release ends it. Text streams to the cursor as live hypotheses — words appear immediately and may self-correct — via the pasteboard insertion path. Every dictation is also archived: audio to a memos area of `~/Recordings`, with the batch pipeline producing the durable transcript, so the archive copy's quality never depends on the live engine. No Mac-only dictation fallback (global hotkey / Mac mic without the TP-7): the TP-7 is the dictation device; this also keeps the Input Monitoring permission out of the app.
+Memo hold (CC 27 press) starts capture from the TP-7 mic over USB; release ends it. Capture begins before the analyzer is involved and its audio queues until the analyzer starts, so words spoken as the button goes down are kept. Text streams to the cursor as live hypotheses — words appear immediately and may self-correct — via the pasteboard insertion path. Every dictation is also archived: audio to a memos area of `~/Recordings`, with the batch pipeline producing the durable transcript, so the archive copy's quality never depends on the live engine. No Mac-only dictation fallback (global hotkey / Mac mic without the TP-7): the TP-7 is the dictation device; this also keeps the Input Monitoring permission out of the app.
 
 ## Gesture grammar
 

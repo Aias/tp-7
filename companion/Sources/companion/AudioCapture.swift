@@ -17,7 +17,8 @@ final class AudioCapture {
 
 	private let engine = AVAudioEngine()
 	private var converter: AVAudioConverter?
-	private var archive: (file: AVAudioFile, converter: AVAudioConverter)?
+	private var archive: (file: AVAudioFile, converter: AVAudioConverter, url: URL)?
+	private var running = false
 	/// Written from the audio tap and read from the main actor.
 	private let level = Mutex(Level())
 	/// Only touched from the audio tap, which runs serially.
@@ -191,10 +192,11 @@ final class AudioCapture {
 				let archiveConverter = AVAudioConverter(
 					from: hardwareFormat, to: file.processingFormat)
 			else {
+				try? FileManager.default.removeItem(at: url)
 				throw CaptureError.converterUnavailable
 			}
 			archiveConverter.channelMap = [0]
-			return (file, archiveConverter)
+			return (file, archiveConverter, url)
 		}
 		bufferCount = 0
 		level.withLock { $0 = Level() }
@@ -228,7 +230,13 @@ final class AudioCapture {
 				}
 			}
 		}
-		try engine.start()
+		running = true
+		do {
+			try engine.start()
+		} catch {
+			stop()
+			throw error
+		}
 		Log.d("capture: engine started")
 	}
 
@@ -243,11 +251,22 @@ final class AudioCapture {
 		}
 	}
 
+	/// Stops the engine and closes the archive, deleting it when it holds no
+	/// audio: FLAC writing leaves a header-only file unless a full block
+	/// (about 96 ms) was written. Safe to call when capture never started or
+	/// has already stopped.
 	func stop() {
+		guard running else { return }
+		running = false
 		engine.inputNode.removeTap(onBus: 0)
 		engine.stop()
 		converter = nil
-		archive = nil
+		if let url = archive?.url {
+			archive = nil
+			if (try? AVAudioFile(forReading: url)) == nil {
+				try? FileManager.default.removeItem(at: url)
+			}
+		}
 		if let peak = peakDecibels {
 			Log.d("capture: stopped, channel 0 peak \(String(format: "%.1f", peak)) dBFS")
 		}
