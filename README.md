@@ -27,9 +27,10 @@ Recordings already present locally are recorded as `preexisting` and never re-pu
 brew install rust ffmpeg
 ./scripts/setup-tp7-cli.sh   # build + install the patched tp7 CLI
 bun install
+cp src/transcriber/.env.example src/transcriber/.env
 ```
 
-The transcriber reads `ASSEMBLYAI_API_KEY` and `OPENAI_API_KEY` from `src/transcriber/.env` (gitignored). Optional per-user vocabulary and speaker rosters live in `src/transcriber/transcription.config.local.ts` (also gitignored, merged over `transcription.config.defaults.ts`).
+`src/transcriber/.env` (gitignored) holds the API keys: `ASSEMBLYAI_API_KEY` and `OPENAI_API_KEY` for transcription, and `TYPESAFE_API_KEY` for TypeSafe's Jev model. Optional per-user vocabulary and speaker rosters live in `src/transcriber/transcription.config.local.ts` (also gitignored, merged over `transcription.config.defaults.ts`).
 
 Optional settings overrides go in `~/.config/tp7sync/config.json`; see `src/config.ts` for the schema and defaults.
 
