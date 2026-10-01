@@ -7,9 +7,9 @@ import { formatSpeakerName, type SpeakerMap } from './speaker-identification.js'
 import { processWithPool } from './concurrency.js';
 import { MODELS, openai } from './openai.js';
 
-// Sentences per request. Large enough that a meeting is tens of requests rather
-// than hundreds; small enough that a failure costs one passage, not the file.
-const SENTENCES_PER_REQUEST = 40;
+// Sentences per request. Larger packs finish sooner but leave more fillers in
+// their later turns; at this size cleaning still finishes before the summary.
+const SENTENCES_PER_REQUEST = 15;
 const CONCURRENCY = 10;
 
 // Trailing characters of the preceding request carried in as context, so a
