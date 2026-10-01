@@ -81,6 +81,9 @@ const CleanedTurnsSchema = z.object({
 	),
 });
 
+const FILLER = /\b(?:um+|uh+|erm?|mm+|hmm+|you know|i mean|like)\b/i;
+const REPEATED_WORD = /\b([\w']+)\W+\1\b/i;
+
 export interface CleanedGroup {
 	speaker: string;
 	start: number;
@@ -201,9 +204,12 @@ async function cleanPassage(text: string, systemPrompt: string): Promise<string>
 /**
  * Cleans one dictated utterance destined for a text field: the same edits as
  * a transcript passage, flattened to a single line so the inserter never
- * types a newline into a field where Return might submit.
+ * types a newline into a field where Return might submit. Text with no
+ * filler words or repeated words is returned as given, without a model call.
  */
 export async function cleanUtterance(text: string): Promise<string> {
+	if (!FILLER.test(text) && !REPEATED_WORD.test(text)) return text;
+
 	const systemPrompt = makePassageSystemPrompt(await getVocabulary());
 	const cleaned = await cleanPassage(text, systemPrompt);
 	return cleaned.replace(/\s*\n+\s*/g, ' ');
