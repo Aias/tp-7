@@ -15,9 +15,9 @@ On top of that, tp7sync runs the ingest loop:
 
 1. Detect the TP-7 on USB (cheap; does not disturb audio mode).
 2. List `/recordings` and `/memo` on the device, diff against the manifest at `~/Recordings/.tp7sync/manifest.json`.
-3. Pull each new file into `~/Recordings/meetings` (from `/recordings`) or `~/Recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset, and ingest posts a notification naming it.
-4. Run the transcription pipeline (AssemblyAI diarization → speaker identification → clean-verbatim editing → summary → AI-generated title) over each pulled file, which produces a `YYYY-MM-DD_HHMM-title/` folder beside it. Pulled files that fail to transcribe are retried on the next run.
-5. Move the WAV into that folder and post a macOS notification.
+3. Pull each new file into `~/Recordings/meetings` (from `/recordings`) or `~/Recordings/memos` (from `/memo`), verifying sizes. Files modified in the last two minutes are skipped in case they are still recording. A file dated 1980 means the device's clock is unset: pull emits a `misdated` event for it, and `redate` records the right start time.
+4. Run the transcription pipeline (AssemblyAI diarization → speaker identification and clean-verbatim editing → summary and title) over each pulled file, up to three at once, which produces a `YYYY-MM-DD_HHMM-title/` folder beside it. Pulled files that fail to transcribe are retried on the next run.
+5. Move the WAV into that folder.
 
 Recordings already present locally are recorded as `preexisting` and never re-pulled. Device files are never deleted.
 
@@ -40,7 +40,13 @@ Optional settings overrides go in `~/.config/tp7sync/config.json`; see `src/conf
 bun run now         # ingest new recordings once
 bun run status      # device presence + manifest summary
 bun run transcribe <file> [speakers]   # transcribe any local audio file (speakers: 3 or 2-5)
+bun src/cli.ts redate <file> <when>    # correct a recording's start ("YYYY-MM-DD HH:MM", or "HH:MM" for today)
+bun src/cli.ts draft-summary <live-transcript.md>   # summarize a live transcript on the fast model
 ```
+
+## Event lines
+
+Commands the companion runs print machine-readable lines among their log output: the prefix `@tp7 ` followed by one JSON object. `transcribe` and `transcribe-pulled` emit `stage` and `result` for each recording, `pull` emits `misdated`, `draft-summary` emits `draft`, and `redate` emits `redated`. `src/events.ts` defines the fields.
 
 ## Companion app
 

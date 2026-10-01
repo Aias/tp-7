@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Config } from './config.js';
+import { emit } from './events.js';
 import { loadManifest, updateManifest, type ManifestEntry } from './manifest.js';
 import { listDevices, listFiles, pullFile, type RemoteFile } from './tp7.js';
 import { processWithPool } from './transcriber/concurrency.js';
@@ -58,7 +59,9 @@ export async function pull(config: Config): Promise<PullResult> {
 	const misdated = result.pulled.filter((name) => name.startsWith(UNSET_CLOCK_PREFIX));
 	if (misdated.length > 0) {
 		console.warn(`⚠️  TP-7 clock is unset: ${misdated.join(', ')}`);
-		notify('TP-7 clock is unset', misdated.join(', '));
+		for (const file of misdated) {
+			emit({ event: 'misdated', file });
+		}
 	}
 	return result;
 }
@@ -174,7 +177,10 @@ function pendingRecordings(
 async function transcribeRecording(config: Config, name: string, folder: string): Promise<void> {
 	const inputPath = path.join(config.recordingsDir, folder, name);
 	console.log(`📝 Transcribing ${name}...`);
-	const result = await runFullPipeline({ inputPath });
+	const result = await runFullPipeline({
+		inputPath,
+		getStartedAt: () => loadManifest(config.recordingsDir).files[name]?.startedAt,
+	});
 	fs.renameSync(inputPath, path.join(result.folder, name));
 	updateManifest(config.recordingsDir, (manifest) => {
 		const entry = manifest.files[name];
@@ -183,7 +189,6 @@ async function transcribeRecording(config: Config, name: string, folder: string)
 			entry.folder = path.relative(config.recordingsDir, result.folder);
 		}
 	});
-	notify('TP-7 recording transcribed', path.basename(result.folder));
 }
 
 /**
@@ -249,14 +254,6 @@ function isProcessAlive(pid: number): boolean {
 	} catch {
 		return false;
 	}
-}
-
-function notify(title: string, message: string): void {
-	Bun.spawnSync([
-		'osascript',
-		'-e',
-		`display notification ${JSON.stringify(message)} with title ${JSON.stringify(title)}`,
-	]);
 }
 
 function formatSize(bytes: number): string {

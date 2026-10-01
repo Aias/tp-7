@@ -8,6 +8,8 @@ const ManifestEntrySchema = z.object({
 	pulledAt: z.string().nullable(),
 	/** Folder (relative to recordingsDir) holding the recording. */
 	folder: z.string(),
+	/** Corrected start for a recording the device dated wrong, local `YYYY-MM-DDTHH:MM`. */
+	startedAt: z.string().optional(),
 });
 
 const ManifestSchema = z.object({

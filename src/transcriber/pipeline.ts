@@ -19,6 +19,12 @@ export interface TranscriptionOptions {
 	inputPath: string;
 	speakers?: SpeakerHint;
 	outputDir?: string;
+	/**
+	 * The recording's corrected start, local `YYYY-MM-DDTHH:MM`. Read when the
+	 * folder is named, so a correction made while the recording transcribes
+	 * still applies.
+	 */
+	getStartedAt?: () => string | undefined;
 }
 
 /**
@@ -118,11 +124,11 @@ function reportResult(input: string, result: PipelineResult): PipelineResult {
 function fileTranscript(
 	outputDir: string,
 	rawPath: string,
-	inputPath: string,
+	options: TranscriptionOptions,
 	title: string,
 	markdown: string,
 ) {
-	const folder = renameOutputFolder(outputDir, title, inputPath);
+	const folder = renameOutputFolder(outputDir, title, options.inputPath, options.getStartedAt?.());
 	const filenames = getOutputFilenames(path.basename(folder));
 	const newRawPath = path.join(folder, filenames.raw);
 	fs.renameSync(path.join(folder, path.basename(rawPath)), newRawPath);
@@ -151,7 +157,7 @@ export async function runFullPipeline(options: TranscriptionOptions): Promise<Pi
 		const { folder, transcript } = fileTranscript(
 			outputDir,
 			transcriptPath,
-			inputPath,
+			options,
 			'no-speech',
 			'## Transcript\n\nNo speech was detected in this recording.\n',
 		);
@@ -169,7 +175,7 @@ export async function runFullPipeline(options: TranscriptionOptions): Promise<Pi
 	const { folder, transcript } = fileTranscript(
 		outputDir,
 		transcriptPath,
-		inputPath,
+		options,
 		summarized?.title ?? 'untitled',
 		summarized
 			? `## Summary\n\n${summarized.summary}\n\n---\n\n## Transcript\n\n${cleanedText}\n`

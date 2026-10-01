@@ -11,7 +11,9 @@ type Tp7Event =
 			summary: string | null;
 			speech: boolean;
 	  }
-	| { event: 'draft'; title: string; summary: string };
+	| { event: 'misdated'; file: string }
+	| { event: 'draft'; title: string; summary: string }
+	| { event: 'redated'; file: string; folder: string | null };
 
 /** Prints a line the companion parses; every other output line is log text. */
 export function emit(event: Tp7Event): void {

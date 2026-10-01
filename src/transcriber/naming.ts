@@ -44,8 +44,13 @@ export function humanizeTitle(title: string): string {
 	return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** `YYYY-MM-DDTHH:MM` as the `YYYY-MM-DD_HHMM` that starts a folder name. */
+export function formatFolderPrefix(startedAt: string): string {
+	return startedAt.replace('T', '_').replace(':', '');
+}
+
 /** `name`, or `name-2`, `name-3`, … when an earlier recording already took it. */
-function availablePath(parentDir: string, name: string): string {
+export function availablePath(parentDir: string, name: string): string {
 	let candidate = path.join(parentDir, name);
 	for (let suffix = 2; fs.existsSync(candidate); suffix++) {
 		candidate = path.join(parentDir, `${name}-${suffix}`);
@@ -57,9 +62,12 @@ export function renameOutputFolder(
 	currentPath: string,
 	title: string,
 	originalFilename: string,
+	startedAt?: string,
 ): string {
-	// Get date/time from filename or use current date
-	const dateTime = extractDateTimeFromFilename(originalFilename) ?? getCurrentDate();
+	// A corrected start wins over the filename, whose clock may be unset
+	const dateTime = startedAt
+		? formatFolderPrefix(startedAt)
+		: (extractDateTimeFromFilename(originalFilename) ?? getCurrentDate());
 
 	const newPath = availablePath(path.dirname(currentPath), `${dateTime}-${title}`);
 	fs.renameSync(currentPath, newPath);
