@@ -4,7 +4,6 @@ import type { Config } from './config.js';
 import { emit } from './events.js';
 import { loadManifest, updateManifest, type ManifestEntry } from './manifest.js';
 import { listDevices, listFiles, pullFile, type RemoteFile } from './tp7.js';
-import { archiveAsFlac } from './transcriber/audio.js';
 import { processWithPool } from './transcriber/concurrency.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
 
@@ -182,8 +181,6 @@ async function transcribeRecording(config: Config, name: string, folder: string)
 		inputPath,
 		getStartedAt: () => loadManifest(config.recordingsDir).files[name]?.startedAt,
 	});
-	const filed = path.join(result.folder, name);
-	fs.renameSync(inputPath, filed);
 	updateManifest(config.recordingsDir, (manifest) => {
 		const entry = manifest.files[name];
 		if (entry) {
@@ -191,29 +188,7 @@ async function transcribeRecording(config: Config, name: string, folder: string)
 			entry.folder = path.relative(config.recordingsDir, result.folder);
 		}
 	});
-	await archiveRecording(filed);
-}
-
-/**
- * Replaces a filed WAV with a FLAC. The transcript is already done by then, so
- * a failed conversion keeps the WAV, which is still a complete recording.
- */
-async function archiveRecording(filed: string): Promise<void> {
-	if (path.extname(filed).toLowerCase() !== '.wav') {
-		return;
-	}
-	try {
-		const wavSize = fs.statSync(filed).size;
-		const flacPath = await archiveAsFlac(filed);
-		console.log(
-			`📦 Archived ${path.basename(flacPath)} (${formatSize(wavSize)} → ${formatSize(fs.statSync(flacPath).size)})`,
-		);
-	} catch (error) {
-		console.warn(
-			`⚠️  Keeping ${path.basename(filed)} as WAV:`,
-			error instanceof Error ? error.message : error,
-		);
-	}
+	fs.rmSync(inputPath);
 }
 
 /**

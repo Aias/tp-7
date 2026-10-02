@@ -22,8 +22,6 @@ final class MeetingSession {
 	private static let sampleRate = 48_000.0
 	/// Captures shorter than this are button tests, not meetings, and are deleted.
 	private static let minTranscribeSeconds = 5.0
-	/// How far an archived FLAC's duration may differ from its WAV's.
-	private static let flacDurationTolerance = 0.1
 
 	private let capture = AudioCapture()
 	private let systemAudio = SystemAudioCapture()
@@ -349,7 +347,7 @@ final class MeetingSession {
 		if !ok {
 			Log.d("meeting: pipeline failed after reporting a result for \(stamp)")
 		}
-		await groupArtifacts(stamp: stamp, into: finished.folder)
+		groupArtifacts(stamp: stamp, into: finished.folder)
 	}
 
 	/// Posts the fast model's title and summary of the live transcript while
@@ -402,7 +400,7 @@ final class MeetingSession {
 			await repairHeader(systemURL(for: stamp))
 			// Transcribed but never grouped: just finish the grouping.
 			if let folder = recoveredFolder(for: stamp) {
-				await groupArtifacts(stamp: stamp, into: folder)
+				groupArtifacts(stamp: stamp, into: folder)
 				continue
 			}
 			guard let duration = await duration(of: micURL(for: stamp)) else {
@@ -503,57 +501,36 @@ final class MeetingSession {
 
 	/// Crash recovery only, for a capture whose pipeline result was lost: its
 	/// folder is the directory beside the tracks holding a file named for
-	/// the capture, such as the `<stem>.16k.flac` the pipeline leaves there.
-	/// A run that just finished uses the folder it reported instead.
+	/// the capture, such as the `<stem>.16k.flac` the pipeline leaves there,
+	/// and a finished transcript. A folder without one is a run cut short,
+	/// which recovery transcribes again. A run that just finished uses the
+	/// folder it reported instead.
 	private static func recoveredFolder(for stamp: String) -> URL? {
 		let manager = FileManager.default
 		let stem = "\(stamp)_meeting"
 		let entries = try? manager.contentsOfDirectory(
 			at: Paths.meetingsDir, includingPropertiesForKeys: [.isDirectoryKey])
 		return entries?.first { url in
-			url.hasDirectoryPath
-				&& ((try? manager.contentsOfDirectory(atPath: url.path)) ?? [])
-					.contains { $0.hasPrefix(stem) }
+			guard url.hasDirectoryPath else { return false }
+			let names = (try? manager.contentsOfDirectory(atPath: url.path)) ?? []
+			return names.contains { $0.hasPrefix(stem) }
+				&& names.contains { $0.hasSuffix("-transcript.md") }
 		}
 	}
 
-	/// Moves the raw tracks, markers, and context into the pipeline's
-	/// folder, then archives the tracks there as FLAC. The mix is derived
-	/// (regenerated on demand), so it's dropped rather than kept.
-	private static func groupArtifacts(stamp: String, into folder: URL) async {
-		try? FileManager.default.removeItem(at: mixedURL(for: stamp))
+	/// Moves the markers, context, and live transcript into the pipeline's
+	/// folder, then deletes the tracks and their mix: the folder's 16 kHz
+	/// FLAC, which the pipeline checked against its input's duration, is the
+	/// meeting's audio. The mic track goes last, since recovery keys off it.
+	private static func groupArtifacts(stamp: String, into folder: URL) {
 		let manager = FileManager.default
-		let artifacts = [
-			micURL(for: stamp), systemURL(for: stamp), markersURL(for: stamp),
-			contextURL(for: stamp), liveURL(for: stamp),
-		]
-		for url in artifacts where manager.fileExists(atPath: url.path) {
+		for url in [markersURL(for: stamp), contextURL(for: stamp), liveURL(for: stamp)]
+		where manager.fileExists(atPath: url.path) {
 			try? manager.moveItem(
 				at: url, to: folder.appendingPathComponent(url.lastPathComponent))
 		}
-		for track in [micURL(for: stamp), systemURL(for: stamp)] {
-			await archiveAsFLAC(folder.appendingPathComponent(track.lastPathComponent))
-		}
-	}
-
-	/// Tracks record as WAV, which survives a crash mid-capture, and are
-	/// stored as FLAC, which is lossless at a fraction of the size. The WAV
-	/// is deleted only once the FLAC reads back at the same duration.
-	private static func archiveAsFLAC(_ wav: URL) async {
-		guard FileManager.default.fileExists(atPath: wav.path) else { return }
-		let flac = wav.deletingPathExtension().appendingPathExtension("flac")
-		let converted = await Subprocess.runLogged(
-			["ffmpeg", "-y", "-v", "error", "-i", wav.path, "-c:a", "flac", flac.path])
-		if converted,
-			let original = await duration(of: wav), original > 0,
-			let archived = await duration(of: flac),
-			abs(original - archived) <= flacDurationTolerance
-		{
-			try? FileManager.default.removeItem(at: wav)
-		} else {
-			Log.d(
-				"meeting: FLAC of \(wav.lastPathComponent) failed verification, keeping the WAV")
-			try? FileManager.default.removeItem(at: flac)
+		for url in [mixedURL(for: stamp), systemURL(for: stamp), micURL(for: stamp)] {
+			try? manager.removeItem(at: url)
 		}
 	}
 
