@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
@@ -13,14 +12,15 @@ function resolveFfmpegPath(): string {
 const FFMPEG_PATH = resolveFfmpegPath();
 ffmpeg.setFfmpegPath(FFMPEG_PATH);
 
-// A FLAC that decodes to a different length than its WAV is a failed encode.
+// A FLAC that decodes to a different length than its source is a failed encode.
 const MAX_DURATION_DRIFT_SECONDS = 0.1;
 
 /**
  * Downmix to the 16 kHz mono signal AssemblyAI resamples to internally, encoded
  * as FLAC. Lossless, so the model sees the same audio it would from an
  * equivalent WAV, at roughly half the bytes — and upload, not processing,
- * dominates turnaround.
+ * dominates turnaround. It is also the audio the archive keeps once the source
+ * is deleted, so it must match the source's duration.
  */
 export async function convertToFlac(inputPath: string, outputDir: string): Promise<string> {
 	console.log('🎵 Converting audio to 16kHz mono FLAC...');
@@ -40,6 +40,15 @@ export async function convertToFlac(inputPath: string, outputDir: string): Promi
 			.save(flacPath),
 	);
 
+	const [inputDuration, flacDuration] = await Promise.all([
+		readDuration(inputPath),
+		readDuration(flacPath),
+	]);
+	if (Math.abs(inputDuration - flacDuration) > MAX_DURATION_DRIFT_SECONDS) {
+		throw new Error(
+			`${path.basename(flacPath)} is ${flacDuration}s long, the source ${inputDuration}s`,
+		);
+	}
 	return flacPath;
 }
 
@@ -55,33 +64,4 @@ async function readDuration(filePath: string): Promise<number> {
 		throw new Error(`Could not read the duration of ${filePath}`);
 	}
 	return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
-}
-
-/**
- * Replaces a WAV with a FLAC of the same name, lossless and with its channels
- * unchanged. The WAV is deleted only after the FLAC reports the same duration.
- */
-export async function archiveAsFlac(wavPath: string): Promise<string> {
-	const flacPath = wavPath.replace(/\.wav$/i, '.flac');
-	try {
-		await new Promise<void>((resolve, reject) =>
-			ffmpeg(wavPath)
-				.format('flac')
-				.on('error', reject)
-				.on('end', () => resolve())
-				.save(flacPath),
-		);
-		const [wavDuration, flacDuration] = await Promise.all([
-			readDuration(wavPath),
-			readDuration(flacPath),
-		]);
-		if (Math.abs(wavDuration - flacDuration) > MAX_DURATION_DRIFT_SECONDS) {
-			throw new Error(`FLAC is ${flacDuration}s long, the WAV ${wavDuration}s`);
-		}
-	} catch (error) {
-		fs.rmSync(flacPath, { force: true });
-		throw error;
-	}
-	fs.rmSync(wavPath);
-	return flacPath;
 }
