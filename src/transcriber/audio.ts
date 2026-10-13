@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
@@ -52,7 +53,22 @@ export async function convertToFlac(inputPath: string, outputDir: string): Promi
 	return flacPath;
 }
 
+/**
+ * When a recording made by another app started. Recorders stamp a file as they
+ * finish writing it, in its creation_time tag or else its modification time,
+ * so the start is that stamp less the recording's length.
+ */
+export async function estimateRecordingStart(filePath: string): Promise<Date> {
+	const { duration, creationTime } = await probe(filePath);
+	const finished = creationTime ?? fs.statSync(filePath).mtime;
+	return new Date(finished.getTime() - duration * 1000);
+}
+
 async function readDuration(filePath: string): Promise<number> {
+	return (await probe(filePath)).duration;
+}
+
+async function probe(filePath: string): Promise<{ duration: number; creationTime?: Date }> {
 	const proc = Bun.spawn([FFMPEG_PATH, '-hide_banner', '-i', filePath], {
 		stdout: 'ignore',
 		stderr: 'pipe',
@@ -63,5 +79,10 @@ async function readDuration(filePath: string): Promise<number> {
 	if (!match) {
 		throw new Error(`Could not read the duration of ${filePath}`);
 	}
-	return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+	const tagged = stderr.match(/creation_time\s*:\s*(\S+)/)?.[1];
+	const creationTime = tagged ? new Date(tagged) : undefined;
+	return {
+		duration: Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]),
+		creationTime: creationTime && !Number.isNaN(creationTime.getTime()) ? creationTime : undefined,
+	};
 }

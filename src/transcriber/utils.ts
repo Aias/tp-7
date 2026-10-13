@@ -43,10 +43,9 @@ export async function timed<T>(stage: string, run: () => Promise<T>): Promise<T>
 	}
 }
 
-export function createOutputFolder(inputPath: string): string {
-	const dir = path.dirname(inputPath);
+export function createOutputFolder(inputPath: string, parentDir = path.dirname(inputPath)): string {
 	const baseName = path.basename(inputPath, path.extname(inputPath));
-	const outputDir = path.join(dir, baseName);
+	const outputDir = path.join(parentDir, baseName);
 
 	if (!fs.existsSync(outputDir)) {
 		fs.mkdirSync(outputDir, { recursive: true });

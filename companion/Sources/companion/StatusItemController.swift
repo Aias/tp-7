@@ -74,10 +74,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 	private let browseItem: NSMenuItem
 	private let onIngestNow: () -> Void
 	private let onBrowseDevice: () -> Void
+	private let onTranscribeFile: () -> Void
 
-	init(onIngestNow: @escaping () -> Void, onBrowseDevice: @escaping () -> Void) {
+	init(
+		onIngestNow: @escaping () -> Void, onBrowseDevice: @escaping () -> Void,
+		onTranscribeFile: @escaping () -> Void
+	) {
 		self.onIngestNow = onIngestNow
 		self.onBrowseDevice = onBrowseDevice
+		self.onTranscribeFile = onTranscribeFile
 		statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 		ingestItem = NSMenuItem(title: "Ingest Now", action: nil, keyEquivalent: "i")
 		browseItem = NSMenuItem(title: "List Device Files", action: nil, keyEquivalent: "")
@@ -96,6 +101,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 		browseItem.target = self
 		browseItem.action = #selector(browseDevice)
 		menu.addItem(browseItem)
+		let transcribe = NSMenuItem(
+			title: "Transcribe File…", action: #selector(transcribeFile), keyEquivalent: "t")
+		transcribe.target = self
+		menu.addItem(transcribe)
 		let open = NSMenuItem(
 			title: "Open Recordings Folder", action: #selector(openRecordings),
 			keyEquivalent: "o")
@@ -167,6 +176,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
 	@objc private func browseDevice() {
 		onBrowseDevice()
+	}
+
+	@objc private func transcribeFile() {
+		onTranscribeFile()
 	}
 
 	@objc private func openRecordings() {

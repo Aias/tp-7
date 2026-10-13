@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import path from 'node:path';
 import { loadConfig } from './config.js';
 import { emit } from './events.js';
 import { ingest, pull, transcribePulled } from './ingest.js';
@@ -7,7 +8,8 @@ import { redate } from './redate.js';
 import { listDevices } from './tp7.js';
 import { cleanUtterance } from './transcriber/cleaning.js';
 import { streamLive } from './transcriber/live.js';
-import { humanizeTitle } from './transcriber/naming.js';
+import { estimateRecordingStart } from './transcriber/audio.js';
+import { formatStartedAt, humanizeTitle } from './transcriber/naming.js';
 import { MODELS } from './transcriber/openai.js';
 import { runFullPipeline } from './transcriber/pipeline.js';
 import { summarizeAndTitle } from './transcriber/summarization.js';
@@ -21,7 +23,8 @@ Usage:
   bun src/cli.ts transcribe-pulled            Transcribe pulled recordings
   bun src/cli.ts redate <file> <when>         Correct a recording's start ("YYYY-MM-DD HH:MM" or "HH:MM" today)
   bun src/cli.ts status                       Show device presence and ingest state
-  bun src/cli.ts transcribe <file> [speakers] Transcribe one local audio file (speakers: 3 or 2-5)
+  bun src/cli.ts transcribe <file> [speakers] Transcribe one audio file (speakers: 3 or 2-5); one from
+                                              outside the recordings folder is filed into meetings/
   bun src/cli.ts clean <text>                 Clean one dictated utterance (fillers, punctuation)
   bun src/cli.ts draft-summary <file>         Summarize a live transcript with the fast model
   bun src/cli.ts live                         Stream 16 kHz mono PCM from stdin; print diarized turns as JSON lines
@@ -91,9 +94,22 @@ switch (command) {
 	}
 	case 'transcribe': {
 		validateEnvironment();
-		const inputPath = parseAndValidateFile(process.argv[3], '⛔ Please provide an audio file path');
+		const inputPath = path.resolve(
+			parseAndValidateFile(process.argv[3], '⛔ Please provide an audio file path'),
+		);
 		const speakers = parseSpeakersArg(process.argv[4]);
-		await runFullPipeline({ inputPath, speakers });
+		if (!path.relative(config.recordingsDir, inputPath).startsWith('..')) {
+			await runFullPipeline({ inputPath, speakers });
+			break;
+		}
+		const startedAt = formatStartedAt(await estimateRecordingStart(inputPath));
+		console.log(`🕐 Estimated start: ${startedAt.replace('T', ' ')}`);
+		await runFullPipeline({
+			inputPath,
+			speakers,
+			filingDir: path.join(config.recordingsDir, 'meetings'),
+			getStartedAt: () => startedAt,
+		});
 		break;
 	}
 	case 'clean': {

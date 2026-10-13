@@ -44,6 +44,13 @@ export function humanizeTitle(title: string): string {
 	return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+const pad = (value: number) => String(value).padStart(2, '0');
+
+/** A local time as `YYYY-MM-DDTHH:MM`. */
+export function formatStartedAt(date: Date): string {
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 /** `YYYY-MM-DDTHH:MM` as the `YYYY-MM-DD_HHMM` that starts a folder name. */
 export function formatFolderPrefix(startedAt: string): string {
 	return startedAt.replace('T', '_').replace(':', '');

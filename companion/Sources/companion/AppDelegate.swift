@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -52,7 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		statusItem = StatusItemController(
 			onIngestNow: { [weak self] in self?.ingest() },
-			onBrowseDevice: { [weak self] in self?.browseDevice() })
+			onBrowseDevice: { [weak self] in self?.browseDevice() },
+			onTranscribeFile: { [weak self] in self?.transcribeFiles() })
 		let midi = MIDIEngine { [weak self] event in
 			Task { @MainActor in self?.handle(event) }
 		}
@@ -377,8 +379,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	private func transcribePulled(report: StageReport) async {
-		let transcribed = await Subprocess.runLogged(
-			["bun", "src/cli.ts", "transcribe-pulled"], currentDirectory: Paths.repoRoot
+		if !(await runPipeline(["transcribe-pulled"], report: report)) {
+			Notifier.post(
+				title: "TP-7 transcription failed",
+				message: "See ~/Library/Logs/tp7companion.log")
+		}
+	}
+
+	/// Transcribes audio from anywhere on disk; the pipeline files it into
+	/// meetings/ by its estimated start.
+	private func transcribeFiles() {
+		NSApp.activate()
+		let panel = NSOpenPanel()
+		panel.allowedContentTypes = [.audiovisualContent]
+		panel.allowsMultipleSelection = true
+		guard panel.runModal() == .OK else { return }
+		for file in panel.urls {
+			process("transcribing \(file.lastPathComponent)") { report in
+				if !(await self.runPipeline(["transcribe", file.path], report: report)) {
+					Notifier.post(
+						title: "Transcription failed",
+						message: "\(file.lastPathComponent); see ~/Library/Logs/tp7companion.log")
+				}
+			}
+		}
+	}
+
+	/// Runs a pipeline command, reporting its stages and announcing each
+	/// recording it finishes.
+	private func runPipeline(_ command: [String], report: StageReport) async -> Bool {
+		await Subprocess.runLogged(
+			["bun", "src/cli.ts"] + command, currentDirectory: Paths.repoRoot
 		) { event in
 			switch event {
 			case .stage(let stage, _):
@@ -390,11 +421,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			default:
 				break
 			}
-		}
-		if !transcribed {
-			Notifier.post(
-				title: "TP-7 transcription failed",
-				message: "See ~/Library/Logs/tp7companion.log")
 		}
 	}
 

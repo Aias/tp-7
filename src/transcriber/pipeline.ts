@@ -18,7 +18,8 @@ import { MODELS } from './openai.js';
 export interface TranscriptionOptions {
 	inputPath: string;
 	speakers?: SpeakerHint;
-	outputDir?: string;
+	/** Where the recording's folder is made; beside the input by default. */
+	filingDir?: string;
 	/**
 	 * The recording's corrected start, local `YYYY-MM-DDTHH:MM`. Read when the
 	 * folder is named, so a correction made while the recording transcribes
@@ -37,8 +38,7 @@ export async function runTranscriptionOnly(options: TranscriptionOptions): Promi
 }> {
 	const { inputPath, speakers } = options;
 
-	// Create output folder if not provided
-	const outputDir = options.outputDir || createOutputFolder(inputPath);
+	const outputDir = createOutputFolder(inputPath, options.filingDir);
 	console.log(`📁 Output folder: ${outputDir}`);
 
 	const name = path.basename(inputPath);
@@ -144,12 +144,11 @@ function fileTranscript(
  * and its raw JSON in a folder named for the recording's time and title.
  */
 export async function runFullPipeline(options: TranscriptionOptions): Promise<PipelineResult> {
-	const { speakers } = options;
 	const inputPath = path.resolve(options.inputPath);
 
 	const { outputDir, transcriptionOutput, transcriptPath } = await runTranscriptionOnly({
+		...options,
 		inputPath,
-		speakers,
 	});
 
 	if (!hasSpeech(transcriptionOutput)) {

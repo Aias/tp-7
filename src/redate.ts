@@ -6,18 +6,13 @@ import { loadManifest, updateManifest } from './manifest.js';
 import {
 	availablePath,
 	formatFolderPrefix,
+	formatStartedAt,
 	getCurrentDate,
 	getOutputFilenames,
 } from './transcriber/naming.js';
 
 const WHEN = /^(?:(\d{4}-\d{2}-\d{2}) )?(\d{1,2}):(\d{2})$/;
 const TITLED_FOLDER = /^\d{4}-\d{2}-\d{2}_\d{4}(-.+)$/;
-
-const pad = (value: number) => String(value).padStart(2, '0');
-
-function formatStartedAt(date: Date): string {
-	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 /** `YYYY-MM-DD HH:MM`, or `HH:MM` for today, as local `YYYY-MM-DDTHH:MM`. */
 function parseStartedAt(when: string): string {
