@@ -18,6 +18,7 @@ final class MeetingSession {
 
 	private(set) var phase: Phase = .armed
 	private var cancelled = false
+	private var finished = false
 
 	private static let sampleRate = 48_000.0
 	/// Captures shorter than this are button tests, not meetings, and are deleted.
@@ -97,6 +98,9 @@ final class MeetingSession {
 
 	/// A live mic rises above the silence floor well within this long.
 	private static let silenceCheckSeconds = 5.0
+	/// The mic delivers audio about every 100 ms, so a recording this long
+	/// without any has stalled.
+	private static let stallCheckSeconds = 10.0
 	private var capturingMacMic = false
 
 	/// The system-audio track is never judged: silence there is normal for
@@ -201,6 +205,26 @@ final class MeetingSession {
 			try? await Task.sleep(for: .seconds(Self.silenceCheckSeconds))
 			self?.warnIfMicSilent()
 		}
+		Task { [weak self] in await self?.watchForStall() }
+	}
+
+	/// Warns once per stall when the mic stops delivering audio mid-recording.
+	private func watchForStall() async {
+		var lastFrames = micFramesWritten
+		var stalled = false
+		while !finished {
+			try? await Task.sleep(for: .seconds(Self.stallCheckSeconds))
+			let advanced = micFramesWritten != lastFrames
+			lastFrames = micFramesWritten
+			guard phase == .recording, !finished else { continue }
+			if !advanced && !stalled {
+				Log.d("meeting: no mic audio for \(Int(Self.stallCheckSeconds)) s at \(Self.hms(elapsed))")
+				Notifier.post(
+					title: "Meeting audio stopped",
+					message: "Nothing has reached the Mac for \(Int(Self.stallCheckSeconds)) seconds.")
+			}
+			stalled = !advanced
+		}
 	}
 
 	func pause() {
@@ -275,6 +299,7 @@ final class MeetingSession {
 	/// Stops both tracks, mixes them, and runs the batch transcription
 	/// pipeline; artifacts group into the pipeline's titled folder.
 	func finish(onStage: StageReport) async {
+		finished = true
 		let duration = elapsed
 		noteEnded()
 		capture.stop()
