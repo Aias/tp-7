@@ -9,15 +9,23 @@ import Synchronization
 /// delivered converted to the requested format; channel 0 is also archived
 /// as mono FLAC when an archive URL is given. The peak level of channel 0
 /// is tracked for the whole capture.
-final class AudioCapture {
+///
+/// A hardware change elsewhere on the Mac, such as screen mirroring taking
+/// over the default output, stops the engine and drops the pinned device;
+/// capture re-pins the device and resumes.
+final class AudioCapture: NSObject {
 	private struct Level {
 		var peak: Float = 0
 		var frames = 0
 	}
 
 	private let engine = AVAudioEngine()
+	private var device = AudioDeviceID(kAudioObjectUnknown)
+	private var outputFormat: AVAudioFormat?
+	private var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 	private var converter: AVAudioConverter?
-	private var archive: (file: AVAudioFile, converter: AVAudioConverter, url: URL)?
+	private var archive: (file: AVAudioFile, url: URL)?
+	private var archiveConverter: AVAudioConverter?
 	private var running = false
 	/// Written from the audio tap and read from the main actor.
 	private let level = Mutex(Level())
@@ -160,6 +168,28 @@ final class AudioCapture {
 		archiveURL: URL?,
 		onBuffer: @escaping (AVAudioPCMBuffer) -> Void
 	) throws {
+		self.device = device
+		self.outputFormat = outputFormat
+		self.onBuffer = onBuffer
+		archive = try archiveURL.map { (file: try Self.openArchive(at: $0), url: $0) }
+		bufferCount = 0
+		level.withLock { $0 = Level() }
+		running = true
+		do {
+			try connect()
+		} catch {
+			stop()
+			throw error
+		}
+		NotificationCenter.default.addObserver(
+			self, selector: #selector(engineConfigurationChanged),
+			name: .AVAudioEngineConfigurationChange, object: engine)
+		Log.d("capture: engine started")
+	}
+
+	/// Pins the engine's input to the capture device, builds the converters
+	/// for its hardware format, installs the tap, and starts the engine.
+	private func connect() throws {
 		var deviceID = device
 		guard let audioUnit = engine.inputNode.audioUnit else {
 			throw CaptureError.noInputUnit
@@ -173,33 +203,32 @@ final class AudioCapture {
 		}
 
 		let hardwareFormat = engine.inputNode.inputFormat(forBus: 0)
+		guard
+			let outputFormat,
+			let converter = AVAudioConverter(from: hardwareFormat, to: outputFormat)
+		else {
+			throw CaptureError.converterUnavailable
+		}
 		Log.d(
 			"capture: device \(device), hw format \(hardwareFormat.sampleRate)Hz "
 				+ "\(hardwareFormat.channelCount)ch, target \(outputFormat.sampleRate)Hz "
 				+ "\(outputFormat.channelCount)ch")
-		guard let converter = AVAudioConverter(from: hardwareFormat, to: outputFormat) else {
-			throw CaptureError.converterUnavailable
-		}
 		// The default many-to-one channel mapping silently zeroes the signal;
 		// take channel 0 — where the TP-7's mic lives (verified: the mic
 		// occupies the first stereo pair, channels 2-5 are silent), and the
 		// primary channel of any ordinary mic.
 		converter.channelMap = [0]
 		self.converter = converter
-		archive = try archiveURL.map { url in
-			let file = try Self.openArchive(at: url)
+		archiveConverter = try archive.map { archive in
 			guard
 				let archiveConverter = AVAudioConverter(
-					from: hardwareFormat, to: file.processingFormat)
+					from: hardwareFormat, to: archive.file.processingFormat)
 			else {
-				try? FileManager.default.removeItem(at: url)
 				throw CaptureError.converterUnavailable
 			}
 			archiveConverter.channelMap = [0]
-			return (file, archiveConverter, url)
+			return archiveConverter
 		}
-		bufferCount = 0
-		level.withLock { $0 = Level() }
 
 		engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: hardwareFormat) {
 			[weak self] buffer, _ in
@@ -209,9 +238,9 @@ final class AudioCapture {
 				Log.d("capture: buffer #\(self.bufferCount), \(buffer.frameLength) frames")
 			}
 			self.measure(buffer)
-			if let archive = self.archive {
+			if let archive = self.archive, let archiveConverter = self.archiveConverter {
 				do {
-					try archive.file.write(from: Self.convert(buffer, with: archive.converter))
+					try archive.file.write(from: Self.convert(buffer, with: archiveConverter))
 				} catch {
 					if self.bufferCount == 1 {
 						Log.d("capture: archive write failed: \(error)")
@@ -222,7 +251,7 @@ final class AudioCapture {
 			do {
 				let converted = try Self.convert(buffer, with: converter)
 				if converted.frameLength > 0 {
-					onBuffer(converted)
+					self.onBuffer?(converted)
 				}
 			} catch {
 				if self.bufferCount == 1 {
@@ -230,14 +259,24 @@ final class AudioCapture {
 				}
 			}
 		}
-		running = true
+		try engine.start()
+	}
+
+	/// Posted on an engine thread once the engine has stopped itself; the
+	/// reconnect runs on the main thread, where start and stop run.
+	@objc private func engineConfigurationChanged(_ notification: Notification) {
+		performSelector(onMainThread: #selector(reconnect), with: nil, waitUntilDone: false)
+	}
+
+	@objc private func reconnect() {
+		guard running, !engine.isRunning else { return }
+		Log.d("capture: audio configuration changed, reconnecting")
+		engine.inputNode.removeTap(onBus: 0)
 		do {
-			try engine.start()
+			try connect()
 		} catch {
-			stop()
-			throw error
+			Log.d("capture: reconnect failed: \(error)")
 		}
-		Log.d("capture: engine started")
 	}
 
 	/// Folds the buffer's channel 0 into the running peak.
@@ -258,9 +297,13 @@ final class AudioCapture {
 	func stop() {
 		guard running else { return }
 		running = false
+		NotificationCenter.default.removeObserver(
+			self, name: .AVAudioEngineConfigurationChange, object: engine)
 		engine.inputNode.removeTap(onBus: 0)
 		engine.stop()
 		converter = nil
+		onBuffer = nil
+		archiveConverter = nil
 		if let url = archive?.url {
 			archive = nil
 			if (try? AVAudioFile(forReading: url)) == nil {
