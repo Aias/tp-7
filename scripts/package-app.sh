@@ -47,15 +47,12 @@ IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
 codesign --force --sign "${IDENTITY:--}" "$STAGING"
 echo "Signed with: ${IDENTITY:-ad-hoc}"
 
-# Point the installed app at a repo checkout for the ingest/transcription
-# pipeline: the Conductor root checkout when packaging from a worktree,
-# else this checkout. Existing config is left alone.
+# Point the installed app at the main checkout for the ingest/transcription
+# pipeline, even when packaging from a worktree that may later be deleted.
 CONFIG="$HOME/.config/tp7companion/config.json"
-if [ ! -f "$CONFIG" ]; then
-	mkdir -p "$(dirname "$CONFIG")"
-	printf '{\n\t"repoRoot": "%s"\n}\n' "${CONDUCTOR_ROOT_PATH:-$PWD}" > "$CONFIG"
-	echo "Wrote $CONFIG"
-fi
+mkdir -p "$(dirname "$CONFIG")"
+printf '{\n\t"repoRoot": "%s"\n}\n' "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" > "$CONFIG"
+echo "Wrote $CONFIG"
 
 osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null || true
 rm -rf "$INSTALL_PATH"

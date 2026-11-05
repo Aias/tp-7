@@ -47,6 +47,7 @@ enum Subprocess {
 			do {
 				try process.run()
 			} catch {
+				Log.d("subprocess: \(arguments.joined(separator: " ")) failed to launch: \(error)")
 				continuation.resume(returning: nil)
 			}
 		}
@@ -96,6 +97,7 @@ enum Subprocess {
 			try process.run()
 		} catch {
 			try? log.close()
+			Log.d("subprocess: \(arguments.joined(separator: " ")) failed to launch: \(error)")
 			return false
 		}
 		let reader = stdout.fileHandleForReading

@@ -91,18 +91,13 @@ enum AgentRequest {
 	}
 
 	private static func candidateProjects() -> [String] {
-		let home = FileManager.default.homeDirectoryForCurrentUser
-		let roots = [
-			home.appendingPathComponent("conductor/repos"), home.appendingPathComponent("Code"),
-		]
-		return roots.flatMap { root -> [String] in
-			let entries = (try? FileManager.default.contentsOfDirectory(
-				at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-			return entries
-				.filter { $0.hasDirectoryPath && !$0.lastPathComponent.hasPrefix(".") }
-				.map { "- \($0.path)" }
-				.sorted()
-		}
+		let code = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Code")
+		let entries = (try? FileManager.default.contentsOfDirectory(
+			at: code, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+		return entries
+			.filter { $0.hasDirectoryPath && !$0.lastPathComponent.hasPrefix(".") }
+			.map { "- \($0.path)" }
+			.sorted()
 	}
 
 	private static func timestamp() -> String {
