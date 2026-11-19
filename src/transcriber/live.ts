@@ -1,4 +1,4 @@
-import { AssemblyAI, type StreamingTranscriber } from 'assemblyai';
+import { AssemblyAI, type StreamingTranscriber, type StreamingWord } from 'assemblyai';
 import { getVocabulary } from './transcription.config.loader.js';
 
 const assemblyai = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_API_KEY! });
@@ -25,8 +25,9 @@ const speakerOf = (label: string | undefined) =>
 /**
  * Streams 16 kHz mono PCM from `input` to AssemblyAI with diarization and
  * writes each finished turn to stdout as a JSON line, times in seconds of
- * streamed audio. A dropped session reconnects on the next audio, offset by
- * the audio already streamed. SIGUSR1 ends the current turn immediately.
+ * streamed audio. A turn that spans speakers is written as one line per
+ * speaker. A dropped session reconnects on the next audio, offset by the audio
+ * already streamed. SIGUSR1 ends the current turn immediately.
  */
 export async function streamLive(input: ReadableStream<Uint8Array>): Promise<void> {
 	const keyterms = (await getVocabulary()).slice(0, MAX_KEYTERMS);
@@ -47,14 +48,27 @@ export async function streamLive(input: ReadableStream<Uint8Array>): Promise<voi
 			...(keyterms.length > 0 && { keytermsPrompt: keyterms }),
 		});
 		transcriber.on('turn', (event) => {
-			if (!event.end_of_turn || event.words.length === 0) return;
-			emit({
-				order: nextOrder++,
-				start: offset + (event.words[0]?.start ?? 0) / 1000,
-				end: offset + (event.words.at(-1)?.end ?? 0) / 1000,
-				speaker: speakerOf(event.speaker_label),
-				text: event.transcript,
-			});
+			if (!event.end_of_turn) return;
+			const runs: { speaker: string | null; words: StreamingWord[] }[] = [];
+			for (const word of event.words) {
+				const speaker = speakerOf(word.speaker);
+				const run = runs.at(-1);
+				if (run && (!speaker || !run.speaker || speaker === run.speaker)) {
+					run.speaker ??= speaker;
+					run.words.push(word);
+				} else {
+					runs.push({ speaker, words: [word] });
+				}
+			}
+			for (const { speaker, words } of runs) {
+				emit({
+					order: nextOrder++,
+					start: offset + (words[0]?.start ?? 0) / 1000,
+					end: offset + (words.at(-1)?.end ?? 0) / 1000,
+					speaker,
+					text: words.map((word) => word.text).join(' '),
+				});
+			}
 		});
 		transcriber.on('error', (error) => console.error(`live: ${error.message}`));
 		transcriber.on('close', (code, reason) => {
