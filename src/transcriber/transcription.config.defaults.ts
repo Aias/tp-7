@@ -64,7 +64,7 @@ export const defaultConfig: TranscriptionConfig = {
 		// The API accepts any string here without validating it, so a retired model
 		// name degrades transcription silently. `transcribe` asserts on the
 		// `speech_model_used` the API reports back.
-		speech_models: ['universal-3-5-pro'], // Options: "universal-3-5-pro" (best quality), "universal-2" (cheapest, 99 languages)
+		speech_models: ['assemblyai-stt-3-7'], // Options: "assemblyai-stt-3-7" (best quality, 32 languages), "universal-2" (cheapest, 99 languages)
 		language_code: 'en_us',
 		temperature: 0, // 0 = most deterministic, 1 = most creative
 
